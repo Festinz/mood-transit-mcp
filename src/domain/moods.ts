@@ -38,7 +38,7 @@ const SYNONYMS: Record<string, CanonicalMood> = {
   tired: "tired", sleepy: "tired", exhausted: "tired", drained: "tired", 피곤: "tired", 지침: "tired", 졸림: "tired", 무기력: "tired",
   focused: "focused", focus: "focused", productive: "focused", concentrating: "focused", 집중: "focused", 몰입: "focused", 생산적: "focused",
   hopeful: "hopeful", optimistic: "hopeful", encouraged: "hopeful", hopefuls: "hopeful", 희망: "hopeful", 기대: "hopeful", 용기: "hopeful", 위로: "hopeful", 기분전환: "hopeful",
-  joyful: "joyful", happy: "joyful", cheerful: "joyful", delighted: "joyful", 행복: "joyful", 기쁨: "joyful", 신남: "joyful", 신나: "joyful", 즐거움: "joyful", 밝음: "joyful", 밝은: "joyful", 밝게: "joyful", 밝아: "joyful",
+  joyful: "joyful", happy: "joyful", cheerful: "joyful", delighted: "joyful", 행복: "joyful", 기쁨: "joyful", 신남: "joyful", 신나: "joyful", 즐거움: "joyful", 밝음: "joyful", 밝은: "joyful", 밝게: "joyful", 밝아: "joyful", 좋음: "joyful", 좋아: "joyful", 좋은: "joyful", 좋게: "joyful",
   energetic: "energetic", pumped: "energetic", excited: "energetic", motivated: "energetic", 활기: "energetic", 에너지: "energetic", 의욕: "energetic", 들뜸: "energetic",
   angry: "angry", mad: "angry", furious: "angry", frustrated: "angry", 화남: "angry", 분노: "angry", 짜증: "angry", 답답: "angry",
   lonely: "lonely", isolated: "lonely", alone: "lonely", 외로움: "lonely", 외로운: "lonely", 쓸쓸: "lonely",

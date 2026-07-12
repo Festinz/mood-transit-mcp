@@ -15,7 +15,7 @@ async function main(): Promise<void> {
     endpoint = `http://127.0.0.1:${address.port}/mcp`;
   }
 
-  const client = new Client({ name: "mood-transit-smoke", version: "2.1.0" });
+  const client = new Client({ name: "mood-transit-smoke", version: "2.1.1" });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
     const listed = await client.listTools();
@@ -38,9 +38,9 @@ async function main(): Promise<void> {
     const artistLive = await client.callTool({
       name: "build_live_mood_journey",
       arguments: {
-        currentMood: "기분이 안좋은데",
-        targetMood: "행복",
-        minutes: 20,
+        currentMood: "기분이 안좋음",
+        targetMood: "좋음",
+        minutes: 30,
         preferences: { preferredArtists: ["리센느"], artistScope: "only" }
       }
     });

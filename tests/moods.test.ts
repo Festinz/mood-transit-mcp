@@ -11,7 +11,11 @@ describe("mood input validation", () => {
     ["기분이 안좋은데", "sad"],
     ["기분이 안 좋은데", "sad"],
     ["기분이 안 좋아", "sad"],
+    ["기분이 안좋음", "sad"],
     ["오늘 기분이 별로야", "sad"],
+    ["좋음", "joyful"],
+    ["기분 좋아지는 노래", "joyful"],
+    ["좀 더 좋은 기분", "joyful"],
     ["좀 더 밝은 기분", "joyful"],
     ["신나는", "joyful"]
   ] as const)("normalizes conversational model output %s to %s", (input, expected) => {

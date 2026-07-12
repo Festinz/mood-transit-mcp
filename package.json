@@ -1,6 +1,6 @@
 {
   "name": "mood-transit-mcp",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "license": "MIT",
   "description": "MoodTransit(기분환승) live-catalog mood journey MCP server",

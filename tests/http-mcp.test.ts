@@ -242,6 +242,21 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(artistTracks.length).toBeGreaterThanOrEqual(3);
       expect(artistTracks.every((track) => track.artist === "RESCENE")).toBe(true);
 
+      const modelWordedArtistLive = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "기분이 안좋음",
+          targetMood: "좋음",
+          minutes: 30,
+          preferences: { preferredArtists: ["리센느"], artistScope: "only" }
+        }
+      });
+      expect(modelWordedArtistLive.isError).not.toBe(true);
+      expect(modelWordedArtistLive.structuredContent).toHaveProperty("searchResolution", expect.objectContaining({
+        requestedArtists: ["리센느"],
+        matchedArtists: ["RESCENE"]
+      }));
+
       const multiArtistLive = await client.callTool({
         name: "build_live_mood_journey",
         arguments: {
