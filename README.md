@@ -2,7 +2,7 @@
 
 현재 기분을 비슷한 곡으로 덮거나 바로 정반대 분위기로 점프하지 않고, **Mirror → Bridge → Arrive** 순서로 이동시키는 음악 큐레이션 MCP 서버입니다.
 
-버전 2는 고정 67곡만 추천하지 않습니다. 정상 동작에서는 [ListenBrainz](https://listenbrainz.org/)와 [MusicBrainz](https://musicbrainz.org/) 공개 데이터에서 요청 조건에 맞는 후보를 가져와 취향·기분·활동·날씨·시간에 맞춰 재순위화합니다. 같은 요청은 10분 동안 공개 데이터 캐시를 재사용합니다. 2026-07 기준 MusicBrainz에는 약 3,942만 recording이 등록돼 있지만, 커뮤니티 카탈로그이므로 전 세계 모든 발매를 보장하지는 않습니다.
+정상 동작에서는 [ListenBrainz](https://listenbrainz.org/)와 [MusicBrainz](https://musicbrainz.org/) 공개 데이터에서 요청 조건에 맞는 후보를 가져와 취향·기분·활동·날씨·시간에 맞춰 재순위화합니다. 같은 요청은 10분 동안 공개 데이터 캐시를 재사용합니다. 2026-07 기준 MusicBrainz에는 약 3,942만 recording이 등록돼 있지만, 커뮤니티 카탈로그이므로 전 세계 모든 발매를 보장하지는 않습니다.
 
 공개/fallback 후보의 YouTube Music과 Melon 검색 링크는 각 곡의 `title + artist`로 생성합니다. 공급자가 URL을 전달한 곡은 실제 호스트명이 붙은 전달 링크를 표시합니다. 서버는 YouTube·YouTube Music·Melon의 내부 API를 호출하거나 스크래핑하지 않으며, 해당 서비스의 전체 카탈로그·재생 가능 여부·개인 청취 기록에 접근한다고 주장하지 않습니다.
 
