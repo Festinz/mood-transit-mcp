@@ -1,9 +1,9 @@
 {
   "name": "mood-transit-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "license": "MIT",
-  "description": "MoodTransit(기분환승) stateless Streamable HTTP MCP server",
+  "description": "MoodTransit(기분환승) live-catalog mood journey MCP server",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
@@ -16,6 +16,7 @@
     "start": "node dist/src/index.js",
     "dev": "tsx watch src/index.ts",
     "smoke": "tsx scripts/smoke.ts",
+    "smoke:catalog": "tsx scripts/listenbrainz-smoke.ts",
     "benchmark": "tsx scripts/benchmark.ts",
     "benchmark:endpoint": "tsx scripts/endpoint-benchmark.ts"
   },

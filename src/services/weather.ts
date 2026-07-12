@@ -114,7 +114,7 @@ export class WeatherService {
     try {
       const response = await this.fetchImpl(url, {
         method: "GET",
-        headers: { accept: "application/json", "user-agent": "MoodTransit/1.0" },
+        headers: { accept: "application/json", "user-agent": "MoodTransit/2.0" },
         signal: controller.signal,
         redirect: "error"
       });

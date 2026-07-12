@@ -1,27 +1,75 @@
 # Data provenance
 
-## 곡 메타데이터
+MoodTransit separates candidate discovery, factual metadata, editorial ranking, provider availability, and weather provenance. A result states which candidate scope was actually used and does not imply access to a complete streaming catalog.
 
-카탈로그의 곡 실재 여부, 공식 표기, 아티스트, 발매 연도, 곡 길이는 2026-07-12 기준 Apple Music/iTunes 공개 카탈로그와 아티스트·앨범의 공개 디스코그래피를 교차 확인했습니다. 카탈로그는 한국 대중음악, 국제 대중음악, 연주곡을 고르게 포함합니다.
+## Normal live candidate path
 
-곡 길이는 서비스와 판본에 따라 몇 초 차이가 날 수 있으므로 큐레이션 시간 계산용 근사값으로 취급합니다. 서버는 title·artist로 다음 검색 URL만 동적으로 만듭니다.
+The normal standalone path uses public ListenBrainz APIs, with a 10-minute in-memory cache for equivalent queries:
 
-- YouTube Music search
-- 한국어 카탈로그: Melon search
-- 그 외 카탈로그: Spotify search
+- tag radio for mood/genre-oriented discovery;
+- optional artist radio when the caller supplies a MusicBrainz artist MBID;
+- a batch recording metadata request for MusicBrainz-backed title, artist, duration, recording/artist MBIDs, ISRC, release, year, and community tags.
 
-서버와 저장소에는 음원, 가사, 악보, 앨범 아트, 아티스트 사진, 플랫폼의 직접 track/play URL이 없습니다. 검색 결과의 제공 가능 여부와 재생 권한은 해당 음악 서비스와 사용자 계정·지역 조건을 따릅니다.
+ListenBrainz describes its public listen data and text as available under CC0. Its service terms and third-party resource notices remain applicable:
 
-## 추천 속성
+- [ListenBrainz Terms of Service](https://listenbrainz.org/terms-of-service/)
+- [ListenBrainz API documentation](https://listenbrainz.readthedocs.io/en/latest/users/api/index.html)
 
-`energy`, `valence`, `acousticness`, `familiarity`, mood/weather/activity tag는 MoodTransit의 결정적 음악 큐레이션을 위한 자체 편집 추정치입니다. Apple, Spotify 또는 다른 스트리밍 서비스가 제공한 공식 audio feature라고 주장하지 않습니다. 이 값은 의료·심리 평가나 치료 효과의 근거가 아닙니다.
+MusicBrainz is a community-maintained music encyclopedia. Its database is large but incomplete and may contain missing, delayed, duplicated, or community-edited metadata. MoodTransit therefore never claims that the live results include every song, every release, or every item available from YouTube, Melon, or another provider.
 
-## 날씨
+MusicBrainz separates its database licensing as follows:
 
-현재 날씨와 지오코딩은 [Open-Meteo](https://open-meteo.com/)가 제공하며 [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/)에 따라 출처를 표시합니다. 원본 weather code·기온·풍속을 MoodTransit이 큐레이션용 상태로 분류·가공했다는 사실도 결과 Markdown과 structured data에 함께 표시합니다.
+- core data: [CC0](https://creativecommons.org/publicdomain/zero/1.0/);
+- supplementary data: [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/), requiring attribution, non-commercial use, and share-alike treatment where applicable.
 
-대회 프로토타입은 광고·구독 없이 Open-Meteo의 free non-commercial endpoint를 사용합니다. 공식 무료 한도는 10,000 calls/day, 5,000/hour, 600/minute이며, 서버는 cache·동시 요청 병합·분당 100회 upstream 예산으로 이를 보조합니다. 상용 운영 또는 더 큰 트래픽에서는 적절한 paid 플랜이나 self-host Open-Meteo로 전환하고 attribution을 유지해야 합니다.
+See [MusicBrainz Data License](https://musicbrainz.org/doc/About/Data_License). Results retain ListenBrainz/MusicBrainz attribution, and deployers must review the current license and commercial-use terms for their own use case.
 
-## 갱신 절차
+## Curated fallback catalog
 
-곡을 추가하거나 수정할 때는 공개 카탈로그에서 title, artist, year, duration을 다시 대조하고, ID 중복·범위·카탈로그 그룹을 `tests/catalog.test.ts`로 검증합니다. 추천 추정치를 수정하면 변경 이유와 benchmark/test 결과를 함께 검토합니다.
+The repository includes 67 factual track records. They are used only when the live ListenBrainz/MusicBrainz path fails, is rate-limited, exceeds its deadline, returns an invalid response, or provides fewer than three usable candidates.
+
+Fallback records contain title, artist, year, approximate duration, and MoodTransit-authored recommendation attributes. They contain no audio, lyrics, or artwork. Their mood, energy, valence, acousticness, familiarity, weather, and activity values are editorial estimates, not streaming-provider audio features.
+
+A fallback result is labeled `curated_fallback` and includes the reason. The fallback catalog is not represented as a comprehensive catalog or as the normal source.
+
+## Authorized provider candidate batches
+
+`arrange_candidate_mood_journey` can rank an exact batch supplied by another authorized tool. For example, when the official Melon MCP is available, the host/agent may call it first and pass its returned candidates to MoodTransit.
+
+MoodTransit:
+
+- preserves supplied provider IDs, original ranks, personalization values, and URLs;
+- ranks only the supplied batch;
+- does not call, proxy, or scrape Melon itself;
+- does not infer that the batch represents the provider's complete catalog;
+- does not invent provider availability, IDs, or direct-play URLs.
+
+Any private-history or account-derived signal in such a batch remains data supplied for that request by the authorized upstream tool. MoodTransit does not retrieve that history itself. Follow-up data is carried only in the bounded compressed `refinementState` token returned to the caller and is not persisted server-side.
+
+## Search links and availability
+
+For public/fallback selected tracks, MoodTransit encodes a bounded title-and-artist query into:
+
+- a YouTube Music search URL;
+- a Melon search URL.
+
+These are search/navigation links only. A supplied provider candidate with its own URL shows that caller-provided URL instead and labels it with the actual hostname. MoodTransit does not use the YouTube Data API or a Melon catalog API, does not inspect the search result, and does not guarantee that the recording is present, playable, correctly matched, regionally available, or accessible under the user's account. Direct playback and account permissions remain with the relevant service or authorized provider MCP.
+
+## Weather
+
+Current weather and geocoding are provided by [Open-Meteo](https://open-meteo.com/). MoodTransit maps weather code, temperature, and wind into a small editorial weather context. Output retains attribution under [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+The server uses Open-Meteo without an end-user account and stores successful results only in a short-lived in-memory cache. Deployers must use an Open-Meteo plan or self-hosted configuration appropriate to their traffic and retain attribution.
+
+## Mood and recommendation calculations
+
+MoodTransit's canonical mood vectors, phase interpolation, inferred mood labels, popularity normalization, diversity penalties, and Mirror → Bridge → Arrive scores are software-defined editorial calculations. They are not official ListenBrainz, MusicBrainz, Melon, YouTube, Apple, or Spotify audio features, and they do not establish a therapeutic effect.
+
+Track duration may be absent from live or provider metadata. When necessary, ranking uses a disclosed planning estimate; it does not present that estimate as an authoritative provider duration.
+
+## Storage and privacy boundary
+
+- No audio, lyrics, cover art, preview files, or copied provider playlists are stored.
+- No streaming credential, private listening history, or durable user taste profile is collected.
+- Caches are in-memory TTL LRUs and vanish on restart.
+- Personalization comes from the current explicit request or from the exact candidate batch supplied by an authorized upstream tool.

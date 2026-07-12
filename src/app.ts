@@ -1,10 +1,12 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createMcpServer } from "./mcp/server.js";
+import { createMcpServer, SERVER_VERSION } from "./mcp/server.js";
+import { ListenBrainzService } from "./services/listenbrainz.js";
 import { WeatherService } from "./services/weather.js";
 
 export interface AppOptions {
   weatherService?: WeatherService;
+  listenBrainzService?: ListenBrainzService;
   allowedOrigins?: readonly string[];
 }
 
@@ -51,6 +53,7 @@ function originAllowed(req: Request, originHeader: string, allowedOrigins: Reado
 export function createApp(options: AppOptions = {}): express.Express {
   const app = express();
   const weatherService = options.weatherService ?? new WeatherService();
+  const listenBrainzService = options.listenBrainzService ?? new ListenBrainzService();
   const allowedOrigins = configuredOrigins(options.allowedOrigins);
   app.disable("x-powered-by");
 
@@ -71,11 +74,11 @@ export function createApp(options: AppOptions = {}): express.Express {
   app.use(express.json({ limit: "64kb", strict: true }));
 
   app.get("/", (_req, res) => {
-    res.status(200).json({ status: "ok", service: "mood-transit", version: "1.0.0", mcpEndpoint: "/mcp" });
+    res.status(200).json({ status: "ok", service: "mood-transit", version: SERVER_VERSION, mcpEndpoint: "/mcp" });
   });
 
   app.get("/healthz", (_req, res) => {
-    res.status(200).json({ status: "ok", service: "mood-transit", version: "1.0.0" });
+    res.status(200).json({ status: "ok", service: "mood-transit", version: SERVER_VERSION });
   });
 
   app.get("/readyz", (_req, res) => {
@@ -83,7 +86,7 @@ export function createApp(options: AppOptions = {}): express.Express {
   });
 
   app.post("/mcp", async (req, res, next) => {
-    const server = createMcpServer(weatherService);
+    const server = createMcpServer(weatherService, listenBrainzService);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true

@@ -1,32 +1,50 @@
 import { performance } from "node:perf_hooks";
-import { buildJourney } from "../src/domain/journey.js";
+import { rankExternalCandidates } from "../src/domain/liveJourney.js";
+import type { ExternalMusicCandidate } from "../src/domain/liveTypes.js";
+import { CANONICAL_MOODS } from "../src/domain/types.js";
 
-const iterations = Number(process.env.BENCHMARK_ITERATIONS ?? "1000");
-const moods = ["우울", "불안", "피곤", "차분", "happy", "angry"] as const;
-const targets = ["calm", "hopeful", "joyful", "focused", "energetic"] as const;
+const candidates: ExternalMusicCandidate[] = Array.from({ length: 100 }, (_, index) => ({
+  id: `benchmark-${index}`,
+  title: `Benchmark Track ${index}`,
+  artist: `Benchmark Artist ${index % 24}`,
+  durationSec: 155 + (index % 17) * 7,
+  provider: index % 2 === 0 ? "melon" : "listenbrainz",
+  tags: [CANONICAL_MOODS[index % CANONICAL_MOODS.length] ?? "content"],
+  genres: [index % 3 === 0 ? "k-pop" : index % 3 === 1 ? "indie" : "electronic"],
+  personalizationScore: (100 - index) / 100,
+  originalRank: index + 1,
+  liked: index < 8,
+  recentPlayCount: index < 20 ? 20 - index : 0
+}));
 
-for (let index = 0; index < 50; index += 1) {
-  buildJourney({ currentMood: moods[index % moods.length] ?? "content", targetMood: targets[index % targets.length] ?? "hopeful", minutes: 30 });
-}
-
-const samples: number[] = [];
+const iterations = 500;
+const measurements: number[] = [];
 for (let index = 0; index < iterations; index += 1) {
-  const start = performance.now();
-  buildJourney({
-    currentMood: moods[index % moods.length] ?? "content",
-    targetMood: targets[index % targets.length] ?? "hopeful",
-    weather: index % 2 === 0 ? "rain" : "clear",
-    activity: index % 3 === 0 ? "commute" : "study",
+  const currentMood = CANONICAL_MOODS[index % CANONICAL_MOODS.length] ?? "content";
+  const targetMood = CANONICAL_MOODS[(index * 5 + 3) % CANONICAL_MOODS.length] ?? "hopeful";
+  const started = performance.now();
+  rankExternalCandidates({
+    currentMood,
+    targetMood,
     minutes: 30,
-    languagePreference: index % 4 === 0 ? "korean" : "any"
-  });
-  samples.push(performance.now() - start);
+    tasteProfile: {
+      favoriteGenres: [index % 2 === 0 ? "k-pop" : "indie"],
+      familiarVsDiscovery: (index % 10) / 10
+    }
+  }, candidates);
+  measurements.push(performance.now() - started);
 }
 
-samples.sort((a, b) => a - b);
-const averageMs = samples.reduce((sum, sample) => sum + sample, 0) / samples.length;
-const p99Index = Math.min(samples.length - 1, Math.ceil(samples.length * 0.99) - 1);
-const p99Ms = samples[p99Index] ?? 0;
-const result = { iterations, averageMs: Number(averageMs.toFixed(3)), p99Ms: Number(p99Ms.toFixed(3)), thresholdsMs: { average: 100, p99: 3000 } };
-process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-if (averageMs >= 100 || p99Ms >= 3_000) process.exitCode = 1;
+measurements.sort((a, b) => a - b);
+const averageMs = measurements.reduce((sum, value) => sum + value, 0) / measurements.length;
+const p99Ms = measurements[Math.ceil(measurements.length * 0.99) - 1] ?? 0;
+const report = {
+  engine: "provider-agnostic live candidate ranking",
+  candidatesPerCall: candidates.length,
+  iterations,
+  averageMs: Number(averageMs.toFixed(3)),
+  p99Ms: Number(p99Ms.toFixed(3)),
+  thresholdsMs: { average: 100, p99: 3_000 }
+};
+process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+if (averageMs > 100 || p99Ms > 3_000) process.exitCode = 1;

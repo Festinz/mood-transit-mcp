@@ -1,30 +1,48 @@
 # MoodTransit(기분환승) MCP
 
-현재 기분을 단순히 분류하거나 바로 반대 기분의 곡으로 덮지 않고, **Mirror → Bridge → Arrive** 순서로 천천히 이동시키는 음악 큐레이션 MCP 서버입니다. 현재 기분, 원하는 기분, 날씨, 활동, 가용 시간, 언어·연주곡 선호, 제외 아티스트를 함께 반영합니다.
+현재 기분을 비슷한 곡으로 덮거나 바로 정반대 분위기로 점프하지 않고, **Mirror → Bridge → Arrive** 순서로 이동시키는 음악 큐레이션 MCP 서버입니다.
 
-이 서비스는 음악 큐레이션 도구이며 의료·심리 상담이나 치료 효과를 제공하거나 주장하지 않습니다. 음원, 가사, 앨범 아트를 저장하거나 전송하지 않고, 검증한 곡 메타데이터로 YouTube Music과 Melon 또는 Spotify의 검색 URL만 만듭니다.
+버전 2는 고정 67곡만 추천하지 않습니다. 정상 동작에서는 [ListenBrainz](https://listenbrainz.org/)와 [MusicBrainz](https://musicbrainz.org/) 공개 데이터에서 요청 조건에 맞는 후보를 가져와 취향·기분·활동·날씨·시간에 맞춰 재순위화합니다. 같은 요청은 10분 동안 공개 데이터 캐시를 재사용합니다. 2026-07 기준 MusicBrainz에는 약 3,942만 recording이 등록돼 있지만, 커뮤니티 카탈로그이므로 전 세계 모든 발매를 보장하지는 않습니다.
 
-## 세 단계 전환
+공개/fallback 후보의 YouTube Music과 Melon 검색 링크는 각 곡의 `title + artist`로 생성합니다. 공급자가 URL을 전달한 곡은 실제 호스트명이 붙은 전달 링크를 표시합니다. 서버는 YouTube·YouTube Music·Melon의 내부 API를 호출하거나 스크래핑하지 않으며, 해당 서비스의 전체 카탈로그·재생 가능 여부·개인 청취 기록에 접근한다고 주장하지 않습니다.
 
-1. **Mirror — 지금 비추기:** 현재 기분과 에너지를 먼저 인정합니다.
-2. **Bridge — 부드럽게 건너기:** 현재와 목표의 중간 지점을 따라 급격한 점프를 줄입니다.
-3. **Arrive — 원하는 기분에 닿기:** 목표 기분에 가까운 밝기와 에너지로 마무리합니다.
+## 세 도구
 
-추천 순서와 곡 선택은 같은 입력에 대해 결정적입니다. 곡의 `energy`, `valence`, `acousticness`, `familiarity`는 공식 스트리밍 지표가 아니라 이 서비스의 음악 큐레이션용 편집 추정치입니다.
-
-## MCP 도구
-
-| 도구 | 역할 | 외부 통신 |
+| 도구 | 사용 시점 | 후보 범위 |
 | --- | --- | --- |
-| `build_mood_journey` | 사용자가 준 기분·날씨·활동·시간으로 로컬 결정적 여정 구성 | 없음 |
-| `build_weather_journey` | 도시의 현재 날씨를 조회한 뒤 여정 구성 | Open-Meteo 고정 도메인 2개 |
-| `refine_mood_journey` | 이전 여정의 기분·시간·맥락·track ID와 한 가지 피드백으로 새 여정 구성 | 없음 |
+| `build_live_mood_journey` | 다른 음악 MCP 후보가 없을 때 | 요청 조건에 맞는 ListenBrainz·MusicBrainz 공개 후보(10분 캐시 가능) |
+| `arrange_candidate_mood_journey` | 공식 Melon MCP 등 다른 도구가 후보를 반환한 뒤 | 전달받은 후보 묶음만 재배열 |
+| `refine_mood_journey` | 직전 결과를 더 밝게·차분하게·익숙하게·새롭게 수정 | 제공자 mode는 전달 후보 범위를 보존하고 live mode는 공개 후보를 재조회 |
 
-세 도구 모두 읽기 전용이고 광고, 구독 유도, API 키, 개인정보 수집이 없습니다. 결과는 정제된 Markdown 한 블록과 작은 `structuredContent`만 포함합니다.
+모든 도구는 읽기 전용이며 동일하게 해석된 문맥과 후보 집합에서는 결정적으로 순위를 계산합니다. live 공개 데이터와 현재 날씨가 바뀌면 후보 집합도 달라질 수 있습니다. 결과의 `selectionScope`는 매번 다음 중 하나를 명시합니다.
+
+- `public_open_catalog`: ListenBrainz·MusicBrainz 공개 데이터에서 이번 요청에 사용한 후보(10분 캐시 가능)
+- `provided_candidate_batch`: 다른 MCP가 전달한 후보 묶음
+- `curated_fallback`: 공개 경로 장애·후보 부족·요청 필터 불충족 시에만 사용하는 67곡 비상 후보
+
+## 개인화
+
+단독 사용에서는 대화로 받은 다음 취향만 사용합니다.
+
+- 선호·회피 아티스트와 장르
+- 한국어·국제·연주곡 선호
+- 익숙한 곡과 새로운 발견의 균형
+- 현재·목표 기분, 활동, 날씨, 가용 시간
+- 후속 대화의 제외곡·밝기·에너지 피드백
+
+계정이나 청취 기록은 저장하지 않습니다. PlayMCP 도구함에 공식 Melon MCP를 함께 넣으면 AI가 Melon의 OAuth 기반 개인 추천·좋아요·최근 재생 도구에서 후보를 받은 뒤 `arrange_candidate_mood_journey`로 넘길 수 있습니다. 기분환승은 그 후보만 3단계로 재배열하고 Melon ID와 의미상 같은 정규화 URL을 보존합니다.
+
+```text
+공식 Melon MCP 후보 검색/개인 추천
+              ↓
+arrange_candidate_mood_journey
+              ↓
+Mirror → Bridge → Arrive + Melon 전달 링크
+```
 
 ## 실행
 
-요구 사항은 Node.js 22 이상입니다.
+Node.js 22 이상이 필요합니다.
 
 ```bash
 npm install
@@ -34,68 +52,76 @@ npm run build
 npm start
 ```
 
-서버는 기본적으로 `0.0.0.0:8000`에서 대기합니다. `PORT` 환경변수로 포트를 바꿀 수 있습니다.
+서버는 기본 `0.0.0.0:8000`에서 대기하며 `PORT`를 지원합니다.
 
-- MCP endpoint: `POST /mcp`
-- 배포 플랫폼 기본 확인: `GET /`
+- MCP: `POST /mcp`
+- 서비스 정보: `GET /`
 - liveness: `GET /healthz`
 - readiness: `GET /readyz`
 
-MCP Inspector에서는 transport를 Streamable HTTP로 선택하고 `http://127.0.0.1:8000/mcp`를 입력합니다.
+## 검증
 
 ```bash
-npx @modelcontextprotocol/inspector
-```
+# 세 MCP 도구 및 실제 공개 후보 확인
+REQUIRE_LIVE_CATALOG=1 npm run smoke
 
-대표 SDK 호출을 포함한 자체 smoke test는 별도 서버 없이도 실행됩니다. 배포 URL은 `MCP_URL`로 지정합니다.
+# ListenBrainz 태그·아티스트 라디오와 cache 직접 확인
+npm run smoke:catalog
 
-```bash
-npm run smoke
-MCP_URL=https://example.invalid/mcp npm run smoke
+# 순수 경로 계산 benchmark
 npm run benchmark
+
+# 실행 중인 실제 HTTP MCP endpoint benchmark
+MCP_URL=http://127.0.0.1:8000/mcp REQUIRE_LIVE_CATALOG=1 npm run benchmark:endpoint
 ```
 
-실행 중인 실제 MCP endpoint의 HTTP 성능은 별도 benchmark로 확인합니다. 세 도구의 첫 호출과 warm 호출, 작은 동시 호출 표본에 대해 평균·p50·p95·p99와 오류 수를 JSON으로 출력합니다. 날씨는 첫 호출이 성공해 cache가 준비된 경우에만 기본 30회의 warm 호출과 작은 동시 cache 호출을 추가합니다. 이 호출들은 검증된 메모리 cache만 사용하므로 Open-Meteo 요청 수를 늘리지 않습니다.
+`benchmark:endpoint`는 세 도구의 cold/warm/동시 호출을 측정하고 평균 100ms·p99 3,000ms 기준과 실제 `public_open_catalog` source를 검사합니다. 첫 공개 후보 호출 뒤 같은 요청은 10분 cache를 사용합니다.
 
-```bash
-npm start
-MCP_URL=http://127.0.0.1:8000/mcp npm run benchmark:endpoint
-MCP_URL=https://<PUBLIC_ENDPOINT>/mcp REQUIRE_LIVE_WEATHER=1 npm run benchmark:endpoint
-```
+검증 범위:
 
-조절 가능한 값은 `ENDPOINT_BENCHMARK_ITERATIONS`(기본 20), `ENDPOINT_BENCHMARK_CONCURRENCY`(기본 4), `ENDPOINT_BENCHMARK_WEATHER_WARM_CALLS`(0~100, 기본 30), `ENDPOINT_BENCHMARK_CITY`입니다. `REQUIRE_LIVE_WEATHER=1`이면 첫 날씨 결과가 `open-meteo` 또는 `cache`가 아닐 때 실패합니다. 최초 호출의 `cold`는 benchmark 프로세스에서 해당 tool을 처음 호출했다는 뜻이며, 이미 실행 중인 원격 서버의 process/cache cold 상태까지 보장하지는 않습니다.
+- 12×12 전체 기분 조합의 Mirror → Bridge → Arrive 진행성
+- 최대 100개 임의 provider 후보의 결정적 재순위화
+- 공식 Melon MCP와 유사한 최소 메타데이터 후보의 개인화
+- provider ID·URL 보존, cross-provider MBID/ISRC 중복 제거
+- 시간·언어·연주곡·회피·제외·발견 선호
+- ListenBrainz 입력·응답 shape, deadline, rate limit, TTL LRU, in-flight 병합
+- MCP protocol `2025-03-26`, `2025-11-25`, Origin 403, annotations
+- Linux/amd64, non-root Docker, healthcheck
+
+## 외부 데이터와 제한
+
+### ListenBrainz / MusicBrainz
+
+- discovery와 메타데이터 요청은 고정 `https://api.listenbrainz.org` origin만 사용합니다.
+- 전체 외부 요청 deadline은 기본 2,700ms입니다.
+- 성공 결과는 최대 128개·10분 LRU memory cache에 보관합니다.
+- 같은 요청은 in-flight에서 병합하며 `X-RateLimit-*` 헤더를 따릅니다.
+- MusicBrainz 핵심 데이터는 CC0, 보조 데이터는 CC BY-NC-SA 조건을 따릅니다.
+- 음원·가사·커버 이미지는 저장하거나 반환하지 않습니다.
+
+### YouTube / Melon
+
+- 공식 전체 카탈로그 API를 사용하지 않습니다.
+- 생성된 URL은 검색용이며 직접 재생 URL이나 존재 보장이 아닙니다.
+- 제공자 후보 mode에서는 입력에 있던 ID·URL만 보존하고 선택 곡 URL에 실제 호스트명을 표시합니다.
+- YouTube Data API나 비공식 YouTube Music API를 사용하지 않습니다.
+- Melon 직접 검색·개인 추천·재생은 사용자가 별도로 활성화한 공식 Melon MCP의 책임입니다.
+
+### 날씨
+
+`city`가 주어지고 `weather`가 없을 때만 Open-Meteo 현재 날씨를 조회합니다. 주요 국내 8개 도시는 내장 좌표로 forecast 한 번만 호출하며, 결과에는 가공 고지와 CC BY 4.0 링크가 포함됩니다. 날씨 실패는 음악 카탈로그 선택 자체를 막지 않습니다.
 
 ## Docker / PlayMCP in KC
 
-이미지는 `linux/amd64`로 빌드합니다.
-
 ```bash
-docker build --platform linux/amd64 -t mood-transit-mcp:1.0.0 .
-docker run --rm -p 8000:8000 mood-transit-mcp:1.0.0
+docker build --platform linux/amd64 -t mood-transit-mcp:2.0.0 .
+docker run --rm -p 8000:8000 mood-transit-mcp:2.0.0
 ```
 
-컨테이너 포트는 `8000`이며, 플랫폼이 주입하는 `PORT`가 있으면 그 값을 우선합니다. 비밀값이나 API 키는 필요하지 않습니다. 배포 후 받은 공개 HTTPS endpoint 끝에 `/mcp`를 붙여 등록합니다.
+컨테이너 포트는 `8000`입니다. API 키·OAuth·secret은 필요하지 않습니다. 공개 HTTPS endpoint 끝에 `/mcp`를 붙여 PlayMCP에 등록합니다.
 
-## 날씨 데이터와 라이선스
-
-날씨는 [Open-Meteo](https://open-meteo.com/) 데이터이며 분류·가공 사실과 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)을 결과에 표시합니다. 서울·부산·인천·대구·대전·광주·울산·제주는 내장 좌표로 forecast만 한 번 호출하고, 그 밖의 도시는 geocode 후 forecast를 조회합니다. 전체 조회에 2,600ms 데드라인을 적용합니다. 성공 결과는 최대 256개만 10분 LRU 메모리 cache에 보관하고, 같은 도시의 동시 요청은 한 번의 upstream 호출로 합칩니다. 인스턴스당 upstream 요청 예산은 분당 100회입니다. 도시명은 디스크나 로그에 남기지 않으며 실패 시 `unknown` 중립 가중치로 폴백합니다.
-
-이 대회 프로토타입은 Open-Meteo의 free non-commercial endpoint를 사용합니다. 향후 상용 운영 시 적절한 paid 플랜 또는 self-host 배포로 전환하고 attribution을 유지해야 합니다. 자세한 출처는 [데이터 출처 문서](docs/data-provenance.md)를 참고하세요.
-
-## 검증 범위
-
-- 카탈로그 67곡, ID·메타데이터 무결성과 중복 검사
-- 한·영 기분 동의어, 단계 순서, 시간 상한, 제외 아티스트, 연주곡·언어 필터
-- 132개 모든 서로 다른 기분쌍의 곡 순서·단계 중심 단조 전이
-- refine의 이전 곡 제외, 이전 경로·시간·맥락 보존, familiar/discovery 방향
-- 날씨 성공·LRU cache·동시 요청 병합·요청 예산·strict deadline 폴백
-- HTTP root/health/readiness/body limit/method/Origin 검증
-- MCP SDK `initialize`, `tools/list`, 세 도구 대표 호출, 필수 annotations
-- protocol `2025-03-26`, `2025-11-25`
-- 로컬 평균 100ms, p99 3,000ms 기준 benchmark
-
-설계는 [architecture.md](docs/architecture.md), 보안·개인정보 원칙은 [security.md](docs/security.md), 등록용 복사 문구는 [playmcp-submit.md](docs/playmcp-submit.md)에 있습니다.
+구조는 [architecture.md](docs/architecture.md), 보안·개인정보는 [security.md](docs/security.md), 데이터 조건은 [data-provenance.md](docs/data-provenance.md), 등록 문구는 [playmcp-submit.md](docs/playmcp-submit.md)를 참고하세요.
 
 ## 라이선스
 
-서버 코드는 MIT License입니다. 외부 데이터와 사실 메타데이터는 [NOTICE](NOTICE)의 별도 조건을 따릅니다.
+서버 코드는 MIT License입니다. 외부 데이터는 [NOTICE](NOTICE)와 각 공급자의 조건을 따릅니다.
