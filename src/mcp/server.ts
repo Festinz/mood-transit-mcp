@@ -14,7 +14,7 @@ import { LISTENBRAINZ_ATTRIBUTION, ListenBrainzService, ListenBrainzServiceError
 import { OPEN_METEO_ATTRIBUTION, WeatherService } from "../services/weather.js";
 
 export const SERVER_NAME = "mood-transit";
-export const SERVER_VERSION = "2.0.0";
+export const SERVER_VERSION = "2.0.1";
 
 const mood = z.string().trim().min(1).max(40).describe("Mood in Korean or English, such as 울적, 차분, sad, or energetic.");
 const stringList = (maximum: number, itemMaximum = 120) => z.array(z.string().trim().min(1).max(itemMaximum)).max(maximum);

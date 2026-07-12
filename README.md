@@ -114,8 +114,8 @@ MCP_URL=http://127.0.0.1:8000/mcp REQUIRE_LIVE_CATALOG=1 npm run benchmark:endpo
 ## Docker / PlayMCP in KC
 
 ```bash
-docker build --platform linux/amd64 -t mood-transit-mcp:2.0.0 .
-docker run --rm -p 8000:8000 mood-transit-mcp:2.0.0
+docker build --platform linux/amd64 -t mood-transit-mcp:2.0.1 .
+docker run --rm -p 8000:8000 mood-transit-mcp:2.0.1
 ```
 
 컨테이너 포트는 `8000`입니다. API 키·OAuth·secret은 필요하지 않습니다. 공개 HTTPS endpoint 끝에 `/mcp`를 붙여 PlayMCP에 등록합니다.

@@ -15,7 +15,7 @@ async function main(): Promise<void> {
     endpoint = `http://127.0.0.1:${address.port}/mcp`;
   }
 
-  const client = new Client({ name: "mood-transit-smoke", version: "2.0.0" });
+  const client = new Client({ name: "mood-transit-smoke", version: "2.0.1" });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
     const listed = await client.listTools();
