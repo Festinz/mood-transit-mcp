@@ -1,6 +1,6 @@
 # Architecture
 
-MoodTransit(기분환승) v2 is a stateless MCP server that turns an explicit current mood and target mood into a three-stage music journey: **Mirror → Bridge → Arrive**. Its normal standalone path uses request-matched public ListenBrainz/MusicBrainz data, with a 10-minute cache for equivalent queries. The bundled 67-track catalog is used only when that path is unavailable, yields fewer than three usable candidates, or cannot satisfy the requested filters.
+MoodTransit(기분환승) v2.1 is a stateless MCP server that turns an explicit current mood and target mood into a three-stage music journey: **Mirror → Bridge → Arrive**. Its normal standalone path uses request-matched public ListenBrainz/MusicBrainz data, including bounded artist-alias and exact-title search, with a 10-minute cache for equivalent queries. The bundled 67-track catalog is used only when the general live path is unavailable, yields fewer than three usable candidates, or cannot satisfy the requested filters. An explicit artist-only request returns an actionable search error instead of silently substituting unrelated fallback tracks.
 
 ```text
 PlayMCP client
@@ -9,7 +9,8 @@ PlayMCP client
           │
           ├── build_live_mood_journey
           │     ├── optional Open-Meteo current weather lookup
-          │     ├── ListenBrainz tag radio / optional artist radio
+          │     ├── ListenBrainz tag radio
+          │     ├── MusicBrainz artist/alias and exact-title search
           │     ├── ListenBrainz batch endpoint for MusicBrainz metadata
           │     ├── deterministic Mirror → Bridge → Arrive ranking
           │     └── 67-track curated fallback only on live failure/shortage
@@ -35,17 +36,18 @@ PlayMCP client
 
 ### `build_live_mood_journey`
 
-This is the normal standalone entry point. It uses only the user's explicit request: current mood, target mood, time, optional activity/weather/city, stated artist or genre preferences, exclusions, discovery preference, language preference, and an optional MusicBrainz artist MBID.
+This is the normal standalone entry point. It uses only the user's explicit request: current mood, target mood, time, optional activity/weather/city, stated artist, song-title or genre preferences, artist-only scope, exclusions, discovery preference, language preference, and an optional MusicBrainz artist MBID.
 
 The live pipeline is:
 
 1. Normalize Korean or English mood text into one of 12 canonical moods.
 2. Convert the current and target moods into internal valence, energy, and acousticness vectors.
 3. Build bounded discovery tags from the mood path and explicit preferences.
-4. Query `GET /1/lb-radio/tags` and, when a seed artist MBID is supplied, `GET /1/lb-radio/artist/{mbid}`.
-5. Deduplicate recording MBIDs and enrich them in one `POST /1/metadata/recording/` batch with title, artist, duration, ISRC, release, and tags sourced from MusicBrainz data.
-6. Filter and score the returned candidates, then select a time-bounded Mirror → Bridge → Arrive sequence.
-7. If the live request fails, is rate-limited, exceeds its deadline, returns an invalid response, or leaves fewer than three candidates, switch explicitly to the bundled 67-track fallback catalog.
+4. Query `GET /1/lb-radio/tags` for general mood candidates.
+5. When the user names an artist, resolve exact name/alias hits through `GET /ws/2/artist/`; when an artist or title is named, search `GET /ws/2/recording/` and locally enforce exact normalized matches.
+6. Deduplicate targeted and general recording MBIDs, enrich ListenBrainz discoveries, and retain MusicBrainz title, artist, duration, ISRC, release, and community tags.
+7. Filter and score the returned candidates, applying `artistScope=only` only when the user explicitly asks for that artist's songs, then select a time-bounded Mirror → Bridge → Arrive sequence.
+8. If the general live request fails, is rate-limited, exceeds its deadline, returns an invalid response, or leaves fewer than three candidates, switch explicitly to the bundled 67-track fallback catalog. Explicit artist-only no-match/shortage errors instead direct the caller to another spelling or an authorized provider search.
 
 The live data is broad public community metadata, not a complete or guaranteed representation of every release or streaming service.
 
@@ -80,12 +82,13 @@ A bounded beam search chooses an ordered sequence within the requested 10–60 m
 
 ### ListenBrainz/MusicBrainz live candidates
 
-- The only network origin is the fixed HTTPS origin `https://api.listenbrainz.org`.
+- ListenBrainz requests use the fixed HTTPS origin `https://api.listenbrainz.org`; public text search uses the fixed `https://musicbrainz.org/ws/2/` origin.
 - Redirects and responses escaping that origin are rejected.
 - Radio discovery and batch metadata enrichment share one 2,700 ms total deadline.
 - Successful results use a 10-minute in-memory TTL LRU with at most 128 keys.
 - Concurrent equivalent lookups share one in-flight promise.
 - `X-RateLimit-Remaining`, `X-RateLimit-Reset-In`, `X-RateLimit-Reset`, and `Retry-After` are honored. A reset is awaited only when it fits inside the total deadline; otherwise the live request fails clearly and the journey path can use the fallback.
+- MusicBrainz text-search requests are serialized to at most one request per second, use a meaningful User-Agent, reject redirects and oversized JSON, and use their own bounded total deadline and 10-minute LRU.
 
 ### Open-Meteo weather
 

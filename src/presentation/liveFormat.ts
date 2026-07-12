@@ -17,6 +17,17 @@ export interface LiveFormatOptions {
   liveAttribution?: string;
   weatherAttribution?: string;
   fallbackReason?: string;
+  publicSources?: Array<"ListenBrainz" | "MusicBrainz">;
+  searchResolution?: {
+    requestedArtists: string[];
+    requestedTracks: string[];
+    matchedArtists: string[];
+    matchedTracks: string[];
+    artistMatches: Array<{ requestedName: string; name: string; mbid: string }>;
+    unresolvedArtists: string[];
+    artistSearchStatus: "not_requested" | "ok" | "partial" | "no_match" | "error";
+    trackSearchStatus: "not_requested" | "ok" | "no_match" | "error";
+  };
 }
 
 function escapeMarkdown(value: string): string {
@@ -46,10 +57,11 @@ function selectionScope(journey: LiveJourney, options: LiveFormatOptions): {
   statementKo: string;
 } {
   if (journey.candidateSource === "listenbrainz-live") {
+    const sourceLabel = options.publicSources?.join("·") ?? "ListenBrainz·MusicBrainz";
     return {
       kind: "public_open_catalog",
       candidateCount: options.candidateCount,
-      statementKo: `이번 요청에 사용한 ListenBrainz·MusicBrainz 공개 데이터 ${options.candidateCount}개 후보 중 구성했습니다.`
+      statementKo: `이번 요청에 사용한 ${sourceLabel} 공개 데이터 ${options.candidateCount}개 후보 중 구성했습니다.`
     };
   }
   if (journey.candidateSource === "curated-fallback") {
@@ -63,7 +75,7 @@ function selectionScope(journey: LiveJourney, options: LiveFormatOptions): {
   return {
     kind: "provided_candidate_batch",
     candidateCount: options.candidateCount,
-    statementKo: `${providerName}가 반환한 ${options.candidateCount}개 후보 중 구성했으며 해당 공급자의 전체 카탈로그 조회 결과가 아닙니다.`
+    statementKo: `호출자가 ${providerName} 라벨로 전달한 ${options.candidateCount}개 후보 중 구성했으며 해당 공급자의 전체 카탈로그 조회 결과가 아닙니다.`
   };
 }
 
@@ -75,8 +87,13 @@ function linksFor(track: LiveJourneyTrack, candidateSource: LiveJourney["candida
   const links: Array<{ label: string; url: string; type: "provider" | "metadata" | "search" }> = [];
   if (track.providerUrl) {
     const hostname = new URL(track.providerUrl).hostname;
-    links.push({ label: `전달 링크 (${hostname})`, url: track.providerUrl, type: "provider" });
-    if (candidateSource === "external-candidates") return links;
+    if (candidateSource === "external-candidates") {
+      links.push({ label: `전달 링크 (${hostname})`, url: track.providerUrl, type: "provider" });
+      return links;
+    }
+    if (track.provider !== "musicbrainz") {
+      links.push({ label: `공개 원본 (${hostname})`, url: track.providerUrl, type: "metadata" });
+    }
   }
   if (track.recordingMbid) {
     links.push({
@@ -111,6 +128,26 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     ].filter(Boolean).join(" · "));
   }
 
+  if (options.searchResolution) {
+    const requested = [
+      options.searchResolution.requestedArtists.length
+        ? `아티스트 ${options.searchResolution.requestedArtists.map(escapeMarkdown).join(", ")}`
+        : undefined,
+      options.searchResolution.requestedTracks.length
+        ? `곡 ${options.searchResolution.requestedTracks.map(escapeMarkdown).join(", ")}`
+        : undefined
+    ].filter(Boolean).join(" · ");
+    const matched = [
+      options.searchResolution.artistMatches.length
+        ? `확인된 아티스트 ${options.searchResolution.artistMatches.map((match) => `${escapeMarkdown(match.requestedName)}→${escapeMarkdown(match.name)}`).join(", ")}`
+        : undefined,
+      options.searchResolution.matchedTracks.length
+        ? `확인된 곡 ${options.searchResolution.matchedTracks.map(escapeMarkdown).join(", ")}`
+        : undefined
+    ].filter(Boolean).join(" · ");
+    lines.push(`공개 카탈로그 텍스트 검색: ${requested}${matched ? ` → ${matched}` : " → 정확한 일치 없음"}`);
+  }
+
   const stages = PHASES.map((phase) => {
     const phaseTracks = journey.tracks.filter((track) => track.phase === phase);
     lines.push("", `## ${PHASE_LABELS[phase].en} — ${PHASE_LABELS[phase].ko}`);
@@ -123,32 +160,46 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
         `   ${track.reason}`,
         `   ${links.map((link) => markdownLink(link.label, link.url)).join(" · ")}`
       );
+      const sourceProvider = journey.candidateSource === "external-candidates"
+        ? providerName
+        : track.provider === "musicbrainz"
+          ? "MusicBrainz"
+          : track.provider === "listenbrainz"
+            ? "ListenBrainz"
+            : providerName;
       return {
         trackKey: track.id,
         title: track.title,
         artist: track.artist,
         durationSec: duration.seconds,
         durationEstimated: duration.estimated,
-        sourceProvider: providerName,
+        sourceProvider,
         ...(track.originalRank === undefined ? {} : { originalRank: track.originalRank }),
-        inferredMood: track.inferredMood
+        inferredMood: track.inferredMood,
+        moodSignal: track.moodSignal
       };
     });
     return { stage: phase, labelKo: PHASE_LABELS[phase].ko, tracks: outputTracks };
   });
 
+  const publicSourceSet = new Set(options.publicSources ?? ["ListenBrainz", "MusicBrainz"]);
+  const publicSources: Array<Record<string, unknown>> = [
+    ...(publicSourceSet.has("ListenBrainz")
+      ? [{ name: "ListenBrainz", role: "discovery", url: "https://listenbrainz.org/", noteKo: "기분·장르 태그 기반 후보 발견" }]
+      : []),
+    ...(publicSourceSet.has("MusicBrainz")
+      ? [{ name: "MusicBrainz", role: "discovery_and_metadata", url: "https://musicbrainz.org/", noteKo: "아티스트 별칭·곡명 공개 검색과 곡·길이·태그 메타데이터" }]
+      : [])
+  ];
   const sources: Array<Record<string, unknown>> = journey.candidateSource === "listenbrainz-live"
-    ? [
-        { name: "ListenBrainz", role: "discovery", url: "https://listenbrainz.org/", noteKo: "태그·아티스트 라디오 기반 후보 발견" },
-        { name: "MusicBrainz", role: "metadata", url: "https://musicbrainz.org/", noteKo: "곡·아티스트·길이·태그 메타데이터" }
-      ]
+      ? publicSources
     : journey.candidateSource === "curated-fallback"
       ? [{ name: "MoodTransit fallback", role: "candidate_source", noteKo: options.fallbackReason ?? "공개 경로 장애·후보 부족·필터 불충족 시에만 사용" }]
       : [{
           name: providerName,
           role: "candidate_source",
           ...(options.candidateSource?.toolName ? { toolName: options.candidateSource.toolName } : {}),
-          noteKo: "공급자가 반환한 후보만 재배열했으며 공급자 전체 카탈로그를 조회하지 않음"
+          noteKo: "호출자가 이 공급자 라벨로 전달한 후보만 재배열했으며 라벨의 진위를 서버가 인증하지 않음"
         }];
   if (options.weatherAttribution) {
     sources.push({
@@ -170,6 +221,17 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     "3단계 감정 경로와 점수는 기분환승의 편집적 계산이며 공식 음향 특성이나 치료 효과가 아닙니다."
   ];
   if (options.fallbackReason) limitations.push(`실시간 후보 fallback 사유: ${options.fallbackReason}`);
+  if (options.searchResolution) {
+    if (options.searchResolution.unresolvedArtists.length > 0) {
+      limitations.push(`요청한 아티스트의 정확한 공개 카탈로그 일치를 확인하지 못했습니다: ${options.searchResolution.unresolvedArtists.join(", ")}`);
+    }
+    const unresolvedTracks = options.searchResolution.requestedTracks.filter((requested) => (
+      !options.searchResolution!.matchedTracks.some((matched) => matched.toLocaleLowerCase("en") === requested.toLocaleLowerCase("en"))
+    ));
+    if (unresolvedTracks.length > 0) {
+      limitations.push(`요청한 곡명의 정확한 공개 카탈로그 일치를 확인하지 못했습니다: ${unresolvedTracks.join(", ")}`);
+    }
+  }
 
   if (options.liveAttribution) lines.push("", options.liveAttribution);
   if (options.weatherAttribution) lines.push("", options.weatherAttribution);
@@ -198,6 +260,7 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     sources,
     limitations,
     methodologyNoteKo: "3단계 감정 경로와 곡 순서는 기분환승의 편집적 구성입니다. 공급자의 공식 추천 순위나 공식 음향 특성 점수가 아닙니다.",
+    ...(options.searchResolution ? { searchResolution: options.searchResolution } : {}),
     refinementState: options.refinementState
   };
   const result: { content: [{ type: "text"; text: string }]; structuredContent: Record<string, unknown> } = {

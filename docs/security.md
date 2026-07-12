@@ -5,7 +5,7 @@
 - MoodTransit does not request a streaming account, cookie, phone number, email address, advertising identifier, or precise device location.
 - The server has no OAuth flow, custom authentication header, provider API key, or user credential store.
 - It does not read YouTube, YouTube Music, Melon, or other private listening history.
-- Personalization is limited to values explicitly supplied in the current MCP request or in a provider candidate batch: mood, time, activity, city/weather, favorite or avoided artists/genres, language/instrumental preference, discovery preference, likes, recent-play counts, and original provider ranks.
+- Personalization is limited to values explicitly supplied in the current MCP request or in a provider candidate batch: mood, time, activity, city/weather, favorite or avoided artists/genres, named song titles, artist-only scope, language/instrumental preference, discovery preference, likes, recent-play counts, and original provider ranks.
 - No database or cross-session user profile is maintained. MCP requests and refinement state are not persisted by the application.
 - In-memory caches disappear when the process restarts and contain public upstream results or weather lookup results, not private account histories.
 
@@ -32,6 +32,14 @@ User input never selects a network origin or arbitrary path.
 - Requests use HTTPS, a meaningful bounded User-Agent, `redirect: "error"`, and response-origin validation.
 - Tag/artist discovery and metadata enrichment share one 2,700 ms deadline. Timeout, network, HTTP, redirect, rate-limit, and response-shape failures use distinct `ListenBrainzServiceError` codes.
 
+### MusicBrainz search
+
+- Artist and recording searches are constructed only against `https://musicbrainz.org/ws/2/`; user input never supplies a URL or path.
+- Artist names and song titles are bounded, normalized, escaped as quoted Lucene terms, and locally checked for exact name/alias/title equality.
+- Multiple distinct artist MBIDs with the same exact name are returned as an ambiguity error regardless of MusicBrainz search score. The error includes only fixed-origin MusicBrainz artist links so a caller can disambiguate safely; the server never guesses one identity.
+- Requests use HTTPS, a meaningful contact User-Agent, `redirect: "manual"`, response-origin validation, a bounded response body, and typed deadline/network/HTTP/redirect/shape errors.
+- A process-wide queue serializes MusicBrainz requests to one request per second.
+
 ### Open-Meteo
 
 - Weather requests are restricted to `https://geocoding-api.open-meteo.com` and `https://api.open-meteo.com`.
@@ -41,6 +49,7 @@ User input never selects a network origin or arbitrary path.
 ## Cache, concurrency, and rate controls
 
 - ListenBrainz successes use a 10-minute TTL LRU capped at 128 query keys.
+- MusicBrainz search successes use a 10-minute TTL LRU capped at 128 query keys.
 - Weather successes use a 10-minute TTL LRU capped at 256 city keys.
 - Equivalent concurrent requests are coalesced through in-flight deduplication, reducing upstream amplification.
 - ListenBrainz rate-limit response headers are tracked dynamically. The service waits only when the reset fits within the remaining deadline; otherwise it returns a retryable rate-limit failure to the live-catalog layer.
@@ -50,16 +59,19 @@ User input never selects a network origin or arbitrary path.
 ## Failure behavior
 
 - A valid ListenBrainz response with no matches is distinct from an upstream failure.
+- An explicit artist-only request with no exact artist or fewer than three usable public recordings returns `ARTIST_NOT_FOUND`, `ARTIST_CATALOG_TOO_SMALL`, or `PUBLIC_MUSIC_SEARCH_UNAVAILABLE`; it never labels unrelated fallback tracks as that artist.
+- An explicit artist-only request does not start a general ListenBrainz radio request; only exact MusicBrainz artist results are eligible.
 - For `build_live_mood_journey`, a live-catalog failure or fewer than three usable live candidates activates the bundled 67-track catalog and labels the result `curated_fallback` with a reason.
 - The fallback is an availability mechanism, not the normal recommendation source and not evidence of provider availability.
 - Open-Meteo failure omits weather context instead of inventing a condition.
+- Unexpected internal exceptions return a fixed `INTERNAL_ERROR` response; raw exception messages are not exposed to MCP clients.
 - In supplied-candidate mode, an exhausted candidate pool causes a retryable request for a fresh provider batch. The server does not fabricate replacement tracks.
 - Weather and public music discovery start concurrently, keeping the combined cold path within the PlayMCP latency budget instead of stacking both upstream deadlines.
 
 ## Content and link safety
 
 - Live results contain factual public music metadata and MoodTransit's own ranking estimates.
-- Provider-supplied URLs are canonicalized to HTTP(S), reject embedded credentials, are never fetched by MoodTransit, and are labeled with their actual hostname rather than treated as official from a caller-supplied provider name.
+- Provider-supplied URLs are canonicalized to HTTPS and reject embedded credentials, localhost (including a trailing dot), loopback, unspecified, RFC1918, link-local, IPv4-mapped IPv6, IPv6 unique-local/site-local, and other literal non-public ranges. They are never fetched by MoodTransit and are labeled with their actual hostname rather than treated as official from a caller-supplied provider name.
 - Markdown destinations encode delimiter characters, and candidate text/URLs are untrusted data that must never be treated as instructions.
 - Normal responses are compact; boundary-sized results switch to a reduced presentation and regression tests enforce a 64 KiB ceiling. Oversized high-entropy candidate metadata returns `CANDIDATE_METADATA_TOO_LARGE`.
 - YouTube Music and Melon links generated by the server are encoded search URLs only. They are not direct media URLs and do not guarantee availability or playback rights.

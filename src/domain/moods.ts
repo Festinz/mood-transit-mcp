@@ -33,7 +33,7 @@ export const MOOD_KOREAN_LABELS: Record<CanonicalMood, string> = {
 const SYNONYMS: Record<string, CanonicalMood> = {
   calm: "calm", peaceful: "calm", relaxed: "calm", serene: "calm", 편안: "calm", 편안함: "calm", 차분: "calm", 차분함: "calm", 평온: "calm", 안정: "calm",
   content: "content", okay: "content", neutral: "content", satisfied: "content", 무난: "content", 괜찮: "content", 만족: "content", 보통: "content",
-  sad: "sad", down: "sad", gloomy: "sad", blue: "sad", 슬픔: "sad", 슬퍼: "sad", 우울: "sad", 울적: "sad", 침울: "sad", 가라앉음: "sad", 가라앉: "sad",
+  sad: "sad", down: "sad", gloomy: "sad", blue: "sad", 슬픔: "sad", 슬퍼: "sad", 우울: "sad", 울적: "sad", 침울: "sad", 가라앉음: "sad", 가라앉: "sad", 안좋: "sad", 별로: "sad",
   anxious: "anxious", nervous: "anxious", stressed: "anxious", tense: "anxious", 불안: "anxious", 초조: "anxious", 긴장: "anxious", 스트레스: "anxious",
   tired: "tired", sleepy: "tired", exhausted: "tired", drained: "tired", 피곤: "tired", 지침: "tired", 졸림: "tired", 무기력: "tired",
   focused: "focused", focus: "focused", productive: "focused", concentrating: "focused", 집중: "focused", 몰입: "focused", 생산적: "focused",

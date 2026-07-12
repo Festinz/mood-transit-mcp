@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { createApp } from "../src/app.js";
 import { SERVER_NAME } from "../src/mcp/server.js";
 import { ListenBrainzService } from "../src/services/listenbrainz.js";
+import { MUSICBRAINZ_ATTRIBUTION, MusicBrainzService, type MusicBrainzCandidateQuery, type MusicBrainzCandidateResult } from "../src/services/musicbrainz.js";
 import { WeatherService } from "../src/services/weather.js";
 
 const weatherFetch = vi.fn<typeof fetch>()
@@ -32,9 +33,95 @@ const listenBrainzFetch = vi.fn<typeof fetch>(async (input) => {
   }
   return new Response(null, { status: 404 });
 });
+
+const RESCENE_MBID = "a54fd8e2-d319-44a6-aa60-21adf17751bf";
+const TWICE_MBID = "22222222-3333-4444-8555-666666666666";
+const stubArtists = {
+  "리센느": {
+    name: "RESCENE",
+    mbid: RESCENE_MBID,
+    titles: ["Pinball", "LOVE ATTACK", "Glow Up", "Counting Star", "In my lotion", "Love Echo"]
+  },
+  "TWICE": {
+    name: "TWICE",
+    mbid: TWICE_MBID,
+    titles: ["Feel Special", "CHEER UP", "What Is Love?", "ONE SPARK", "Strategy", "Dance The Night Away"]
+  }
+} as const;
+
+class StubMusicBrainzService extends MusicBrainzService {
+  override async searchCandidates(input: MusicBrainzCandidateQuery): Promise<MusicBrainzCandidateResult> {
+    if (input.trackTitles?.length && !input.artists?.length && !input.artistMbids?.length) {
+      return {
+        candidates: ["Artist One", "Artist Two", "Artist Three"].map((artist, index) => ({
+          id: `musicbrainz:ambiguous-${index}`,
+          title: input.trackTitles![0]!,
+          artist,
+          durationSec: 180,
+          provider: "musicbrainz" as const,
+          recordingMbid: `10000000-0000-4000-8000-00000000000${index}`
+        })),
+        matchedArtists: [],
+        matchedArtistNames: [],
+        matchedArtistMbids: [],
+        source: "musicbrainz-live",
+        attribution: MUSICBRAINZ_ATTRIBUTION,
+        fetchedAt: "2026-07-13T00:00:00.000Z"
+      };
+    }
+    const requestedArtists = (input.artists ?? []).flatMap((requestedName) => {
+      const fixture = stubArtists[requestedName as keyof typeof stubArtists];
+      return fixture ? [{ requestedName, fixture }] : [];
+    });
+    const mbidArtists = (input.artistMbids ?? []).flatMap((mbid) => (
+      Object.entries(stubArtists)
+        .filter(([, fixture]) => fixture.mbid === mbid)
+        .map(([requestedName, fixture]) => ({ requestedName, fixture }))
+    ));
+    const resolvedArtists = requestedArtists.length > 0 ? requestedArtists : mbidArtists;
+    // A combined MusicBrainz OR query can fill its limit from the first artist. The production
+    // implementation must issue bounded per-artist searches, which this stub makes observable.
+    const catalogArtists = (input.artists?.length ?? 0) > 1 ? resolvedArtists.slice(0, 1) : resolvedArtists;
+    const requestedTitles = new Set(input.trackTitles ?? []);
+    const candidates = catalogArtists.flatMap(({ fixture }, artistIndex) => fixture.titles
+      .filter((title) => requestedTitles.size === 0 || requestedTitles.has(title))
+      .map((title, index) => {
+        const recordingMbid = `${artistIndex + (fixture.name === "TWICE" ? 2 : 1)}0000000-0000-4000-8000-00000000000${index}`;
+        return {
+          id: `musicbrainz:${fixture.name.toLowerCase()}-${index}`,
+          title,
+          artist: fixture.name,
+          durationSec: 170 + index * 4,
+          provider: "musicbrainz" as const,
+          providerUrl: `https://musicbrainz.org/recording/${recordingMbid}`,
+          recordingMbid,
+          artistMbid: fixture.mbid,
+          artistMbids: [fixture.mbid],
+          tags: [index < 2 ? "sad" : index < 4 ? "content" : "joyful", "k-pop"]
+        };
+      }))
+      .slice(0, input.count ?? 24);
+    return {
+      candidates,
+      matchedArtists: requestedArtists.map(({ requestedName, fixture }) => ({
+        requestedName,
+        name: fixture.name,
+        mbid: fixture.mbid,
+        matchedBy: requestedName === "리센느" ? "alias" as const : "name" as const,
+        ...(requestedName === "리센느" ? { matchedAlias: "리센느" } : {})
+      })),
+      matchedArtistNames: requestedArtists.map(({ fixture }) => fixture.name),
+      matchedArtistMbids: resolvedArtists.map(({ fixture }) => fixture.mbid),
+      source: "musicbrainz-live",
+      attribution: MUSICBRAINZ_ATTRIBUTION,
+      fetchedAt: "2026-07-13T00:00:00.000Z"
+    };
+  }
+}
 const app = createApp({
   weatherService: new WeatherService({ fetchImpl: weatherFetch }),
-  listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch })
+  listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch }),
+  musicBrainzService: new StubMusicBrainzService()
 });
 let server: HttpServer;
 let endpoint: URL;
@@ -134,6 +221,58 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(live.isError).not.toBe(true);
       expect(live.structuredContent).toHaveProperty("selectionScope.kind", "public_open_catalog");
 
+      const artistLive = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "기분이 안좋은데",
+          targetMood: "행복",
+          minutes: 20,
+          preferences: { preferredArtists: ["리센느"], artistScope: "only" }
+        }
+      });
+      expect(artistLive.isError).not.toBe(true);
+      expect(artistLive.structuredContent).toHaveProperty("selectionScope.kind", "public_open_catalog");
+      expect(artistLive.structuredContent).toHaveProperty("searchResolution", expect.objectContaining({
+        requestedArtists: ["리센느"],
+        requestedTracks: [],
+        matchedArtists: ["RESCENE"],
+        matchedTracks: []
+      }));
+      const artistTracks = (artistLive.structuredContent?.stages as Array<{ tracks: Array<{ artist: string }> }>).flatMap((stage) => stage.tracks);
+      expect(artistTracks.length).toBeGreaterThanOrEqual(3);
+      expect(artistTracks.every((track) => track.artist === "RESCENE")).toBe(true);
+
+      const multiArtistLive = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "기분이 안 좋은데",
+          targetMood: "행복",
+          minutes: 20,
+          preferences: { preferredArtists: ["리센느", "TWICE"], artistScope: "only" }
+        }
+      });
+      expect(multiArtistLive.isError).not.toBe(true);
+      expect(multiArtistLive.structuredContent).toHaveProperty("searchResolution", expect.objectContaining({
+        requestedArtists: ["리센느", "TWICE"],
+        matchedArtists: expect.arrayContaining(["RESCENE", "TWICE"]),
+        artistSearchStatus: "ok"
+      }));
+      const multiArtistTracks = (multiArtistLive.structuredContent?.stages as Array<{ tracks: Array<{ artist: string }> }>)
+        .flatMap((stage) => stage.tracks);
+      expect(new Set(multiArtistTracks.map((track) => track.artist))).toEqual(new Set(["RESCENE", "TWICE"]));
+
+      const ambiguousTrack = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "우울",
+          targetMood: "행복",
+          minutes: 20,
+          preferences: { preferredTracks: ["LOVE ATTACK"] }
+        }
+      });
+      expect(ambiguousTrack.isError).toBe(true);
+      expect(ambiguousTrack.structuredContent).toHaveProperty("error.code", "TRACK_AMBIGUOUS");
+
       const liveState = live.structuredContent?.refinementState as Record<string, unknown>;
       const liveRefined = await client.callTool({
         name: "refine_mood_journey",
@@ -199,6 +338,121 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(JSON.stringify(result).length).toBeLessThan(5_000);
     } finally {
       await client.close();
+    }
+  });
+
+  it("rejects literal non-public provider URLs while allowing a public HTTPS literal", async () => {
+    const client = new Client({ name: "provider-url-test", version: "1.0.0" });
+    await client.connect(new StreamableHTTPClientTransport(endpoint));
+    const argumentsFor = (providerUrl: string) => ({
+      currentMood: "sad",
+      targetMood: "hopeful",
+      minutes: 20,
+      candidateSource: { providerName: "Supplied provider" },
+      candidates: Array.from({ length: 3 }, (_, index) => ({
+        providerTrackId: `url-${index}`,
+        title: `URL Candidate ${index}`,
+        artist: `URL Artist ${index}`,
+        durationSec: 180,
+        providerUrl,
+        moodTags: [index === 0 ? "sad" : index === 1 ? "content" : "hopeful"]
+      }))
+    });
+    try {
+      const rejected = [
+        "http://example.com/track",
+        "https://localhost./track",
+        "https://127.1/track",
+        "https://0.1.2.3/track",
+        "https://10.1.2.3/track",
+        "https://172.16.0.1/track",
+        "https://192.168.1.1/track",
+        "https://169.254.1.1/track",
+        "https://[::1]/track",
+        "https://[fe80::1]/track",
+        "https://[fc00::1]/track",
+        "https://[::ffff:127.0.0.1]/track"
+      ];
+      for (const providerUrl of rejected) {
+        const result = await client.callTool({
+          name: "arrange_candidate_mood_journey",
+          arguments: argumentsFor(providerUrl)
+        });
+        expect(result.isError, providerUrl).toBe(true);
+      }
+
+      const publicResult = await client.callTool({
+        name: "arrange_candidate_mood_journey",
+        arguments: argumentsFor("https://8.8.8.8/track")
+      });
+      expect(publicResult.isError).not.toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("does not start ListenBrainz discovery for an explicit artist-only request", async () => {
+    const listenBrainzService = new ListenBrainzService({
+      fetchImpl: vi.fn<typeof fetch>().mockRejectedValue(new Error("ListenBrainz must not be called"))
+    });
+    const getCandidates = vi.spyOn(listenBrainzService, "getCandidates");
+    const isolatedApp = createApp({
+      listenBrainzService,
+      musicBrainzService: new StubMusicBrainzService()
+    });
+    const isolatedServer = await new Promise<HttpServer>((resolve) => {
+      const candidate = isolatedApp.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const address = isolatedServer.address() as AddressInfo;
+    const client = new Client({ name: "artist-only-test", version: "1.0.0" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
+      const result = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "기분이 안좋은데",
+          targetMood: "행복",
+          minutes: 20,
+          preferences: { preferredArtists: ["리센느"], artistScope: "only" }
+        }
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toHaveProperty("selectionScope.kind", "public_open_catalog");
+      expect(getCandidates).not.toHaveBeenCalled();
+    } finally {
+      await client.close().catch(() => undefined);
+      await new Promise<void>((resolve, reject) => isolatedServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("sanitizes unexpected tool exceptions as INTERNAL_ERROR", async () => {
+    class ThrowingWeatherService extends WeatherService {
+      override async lookup(_city: string): Promise<never> {
+        throw new Error("sensitive-internal-detail");
+      }
+    }
+    const isolatedApp = createApp({
+      weatherService: new ThrowingWeatherService(),
+      listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch }),
+      musicBrainzService: new StubMusicBrainzService()
+    });
+    const isolatedServer = await new Promise<HttpServer>((resolve) => {
+      const candidate = isolatedApp.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const address = isolatedServer.address() as AddressInfo;
+    const client = new Client({ name: "internal-error-test", version: "1.0.0" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
+      const result = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { currentMood: "sad", targetMood: "hopeful", minutes: 20, city: "Seoul" }
+      });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toHaveProperty("error.code", "INTERNAL_ERROR");
+      expect(JSON.stringify(result)).not.toContain("sensitive-internal-detail");
+    } finally {
+      await client.close().catch(() => undefined);
+      await new Promise<void>((resolve, reject) => isolatedServer.close((error) => error ? reject(error) : resolve()));
     }
   });
 

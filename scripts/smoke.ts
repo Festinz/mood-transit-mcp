@@ -15,7 +15,7 @@ async function main(): Promise<void> {
     endpoint = `http://127.0.0.1:${address.port}/mcp`;
   }
 
-  const client = new Client({ name: "mood-transit-smoke", version: "2.0.1" });
+  const client = new Client({ name: "mood-transit-smoke", version: "2.1.0" });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
     const listed = await client.listTools();
@@ -32,6 +32,16 @@ async function main(): Promise<void> {
         activity: "commute",
         minutes: 20,
         preferences: { preferredGenres: ["k-pop"], discovery: "adventurous" }
+      }
+    });
+
+    const artistLive = await client.callTool({
+      name: "build_live_mood_journey",
+      arguments: {
+        currentMood: "기분이 안좋은데",
+        targetMood: "행복",
+        minutes: 20,
+        preferences: { preferredArtists: ["리센느"], artistScope: "only" }
       }
     });
 
@@ -64,13 +74,23 @@ async function main(): Promise<void> {
       }
     });
 
-    if (live.isError || arranged.isError || refined.isError) throw new Error("A representative tool call returned isError");
+    if (live.isError || artistLive.isError || arranged.isError || refined.isError) throw new Error("A representative tool call returned isError");
     const liveStructured = (live.structuredContent ?? {}) as Record<string, unknown>;
+    const artistStructured = (artistLive.structuredContent ?? {}) as Record<string, unknown>;
     const refinedStructured = (refined.structuredContent ?? {}) as Record<string, unknown>;
     const liveScope = (liveStructured.selectionScope ?? {}) as { kind?: string; candidateCount?: number; statementKo?: string };
     const arrangedScope = (arrangedStructured.selectionScope ?? {}) as { kind?: string; candidateCount?: number };
     if (process.env.REQUIRE_LIVE_CATALOG === "1" && liveScope.kind !== "public_open_catalog") {
       throw new Error(`Live catalog was required but source was ${liveScope.kind ?? "missing"}`);
+    }
+    const artistResolution = (artistStructured.searchResolution ?? {}) as { matchedArtists?: string[] };
+    const artistStages = (artistStructured.stages ?? []) as Array<{ tracks?: Array<{ artist?: string }> }>;
+    const artistTracks = artistStages.flatMap((stage) => stage.tracks ?? []);
+    if (!artistResolution.matchedArtists?.includes("RESCENE") || artistTracks.length < 3) {
+      throw new Error("Korean artist alias search did not resolve 리센느 to RESCENE candidates");
+    }
+    if (!artistTracks.every((track) => track.artist?.toLocaleLowerCase("en").includes("rescene"))) {
+      throw new Error("artistScope=only returned a track outside the resolved RESCENE artist set");
     }
 
     process.stdout.write(`${JSON.stringify({
@@ -78,6 +98,11 @@ async function main(): Promise<void> {
       tools: toolNames,
       calls: "ok",
       liveCatalog: liveScope,
+      artistSearch: {
+        matchedArtists: artistResolution.matchedArtists,
+        trackCount: artistTracks.length,
+        allTracksMatch: true
+      },
       providedCandidates: arrangedScope,
       refinedRevision: refinedStructured.revision
     }, null, 2)}\n`);

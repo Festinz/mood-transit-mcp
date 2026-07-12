@@ -167,6 +167,34 @@ describe("external candidate ranking", () => {
     expect(korean.tracks.every((track) => track.id.startsWith("ko-"))).toBe(true);
   });
 
+  it("can restrict a journey to a named artist and prioritize an explicitly named song", () => {
+    const candidates: ExternalMusicCandidate[] = [
+      candidate("rescene-mirror", "sad", { artist: "RESCENE", title: "Pinball" }),
+      candidate("rescene-bridge", "content", { artist: "RESCENE", title: "LOVE ATTACK" }),
+      candidate("rescene-arrive", "joyful", { artist: "RESCENE", title: "Glow Up" }),
+      candidate("rescene-extra", "hopeful", { artist: "RESCENE", title: "Counting Star" }),
+      candidate("other-mirror", "sad", { artist: "Other Artist" }),
+      candidate("other-bridge", "content", { artist: "Other Artist 2" }),
+      candidate("other-arrive", "joyful", { artist: "Other Artist 3" })
+    ];
+
+    const journey = rankExternalCandidates({
+      currentMood: "sad",
+      targetMood: "joyful",
+      minutes: 12,
+      tasteProfile: {
+        favoriteArtists: ["RESCENE"],
+        favoriteTracks: ["LOVE ATTACK"],
+        artistScope: "only"
+      }
+    }, candidates);
+
+    expect(journey.tracks.length).toBeGreaterThanOrEqual(3);
+    expect(journey.tracks.every((track) => track.artist === "RESCENE")).toBe(true);
+    expect(journey.tracks.some((track) => track.title === "LOVE ATTACK")).toBe(true);
+    expect(journey.tracks.find((track) => track.title === "LOVE ATTACK")?.reason).toContain("지정 곡");
+  });
+
   it("keeps phase progress nondecreasing for every canonical mood pair", () => {
     for (const currentMood of CANONICAL_MOODS) {
       for (const targetMood of CANONICAL_MOODS) {

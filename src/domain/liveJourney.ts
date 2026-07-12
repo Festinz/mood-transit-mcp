@@ -371,6 +371,16 @@ function matchesTerm(value: string, terms: readonly string[]): boolean {
   });
 }
 
+function favoriteArtistMatch(candidate: ExternalMusicCandidate, taste: TasteProfile): boolean {
+  const requestedMbids = new Set((taste.favoriteArtistMbids ?? []).map(normalizeText));
+  const candidateMbids = candidate.artistMbids ?? (candidate.artistMbid ? [candidate.artistMbid] : []);
+  if (candidateMbids.some((artistMbid) => requestedMbids.has(normalizeText(artistMbid)))) return true;
+  return matchesTerm(normalizeText(candidate.artist), [
+    ...(taste.resolvedArtistNames ?? []),
+    ...(taste.favoriteArtists ?? [])
+  ]);
+}
+
 function genresMatch(candidateGenres: readonly string[], requestedGenres: readonly string[]): boolean {
   return candidateGenres.some((genre) => matchesTerm(genre, requestedGenres));
 }
@@ -383,7 +393,7 @@ function languageMatches(candidate: ExternalMusicCandidate, preference: TastePro
   if (!preference || preference === "any") return true;
   if (preference === "instrumental") return instrumental;
   const language = normalizeText(candidate.language ?? "");
-  if (!language) return false;
+  if (!language) return true;
   const korean = language === "ko" || language === "kor" || language.includes("korean") || language.includes("한국어");
   return preference === "korean" ? korean : !korean;
 }
@@ -440,6 +450,7 @@ function prepareCandidates(
       !matchesTerm(normalizeText(candidate.artist), avoidArtists) &&
       !genresMatch([...normalizedGenres, ...normalizedTags], avoidGenres)
     ))
+    .filter(({ candidate }) => taste.artistScope !== "only" || favoriteArtistMatch(candidate, taste))
     .filter(({ candidate, normalizedTags, normalizedGenres }) => {
       const instrumental = isInstrumental(candidate, [...normalizedTags, ...normalizedGenres]);
       if (taste.instrumentalOnly && !instrumental) return false;
@@ -529,7 +540,8 @@ function scoreCandidate(
 ): number {
   const candidate = prepared.candidate;
   const taste = options.tasteProfile ?? {};
-  const favoriteArtist = matchesTerm(prepared.artistKey, taste.favoriteArtists ?? []);
+  const favoriteArtist = favoriteArtistMatch(candidate, taste);
+  const favoriteTrack = matchesTerm(normalizeText(candidate.title), taste.favoriteTracks ?? []);
   const favoriteGenre = genresMatch([...prepared.normalizedGenres, ...prepared.normalizedTags], taste.favoriteGenres ?? []);
   const popularity = clamp01(candidate.popularity, 0.5);
   const familiarity = Math.min(1, prepared.personalization * 0.65 + popularity * 0.2 + (candidate.liked ? 0.15 : 0));
@@ -549,6 +561,7 @@ function scoreCandidate(
   if (candidate.liked) score += 15;
   score += Math.min(11, Math.log1p(Math.max(0, candidate.recentPlayCount ?? 0)) * 2.5);
   if (favoriteArtist) score += 20;
+  if (favoriteTrack) score += 24;
   if (favoriteGenre) score += 12;
   score += (familiarity - 0.5) * (familiarityPreference - 0.5) * 36;
   if (!prepared.inferred.hasMoodSignal) score += prepared.personalization * 12;
@@ -659,16 +672,21 @@ function reasonFor(prepared: PreparedCandidate, phase: Phase, options: RankExter
   const evidence: string[] = [];
   if (prepared.candidate.liked) evidence.push("좋아요");
   if ((prepared.candidate.recentPlayCount ?? 0) > 0) evidence.push("최근 감상");
-  if (matchesTerm(prepared.artistKey, options.tasteProfile?.favoriteArtists ?? [])) evidence.push("선호 아티스트");
+  if (favoriteArtistMatch(prepared.candidate, options.tasteProfile ?? {})) evidence.push("선호 아티스트");
+  if (matchesTerm(normalizeText(prepared.candidate.title), options.tasteProfile?.favoriteTracks ?? [])) evidence.push("지정 곡");
   if (genresMatch([...prepared.normalizedGenres, ...prepared.normalizedTags], options.tasteProfile?.favoriteGenres ?? [])) evidence.push("선호 장르");
   if (!prepared.inferred.hasMoodSignal && prepared.personalization > 0) evidence.push("공급자 개인화(provider personalization)");
   const evidenceText = evidence.length > 0 ? ` 취향 근거: ${evidence.join(", ")}.` : "";
+  if (!prepared.inferred.hasMoodSignal) {
+    const stage = phase === "mirror" ? "공감" : phase === "bridge" ? "전환" : "도착";
+    return `공개 메타데이터에 뚜렷한 기분 태그가 없어 중립값으로 ${stage} 구간에 배치했습니다.${evidenceText}`;
+  }
   const phaseText = phase === "mirror"
     ? "현재 기분을 먼저 인정하는 곡입니다."
     : phase === "bridge"
       ? "현재와 목표 사이를 부드럽게 잇는 곡입니다."
       : "목표 기분에 가까운 결로 도착하는 곡입니다.";
-  return `${phaseText} 메타데이터에서 추론한 기분은 ${prepared.inferred.canonical}입니다.${evidenceText}`;
+  return `${phaseText} 공개 태그에서 추론한 기분은 ${prepared.inferred.canonical}입니다.${evidenceText}`;
 }
 
 function journeyId(options: RankExternalCandidatesOptions, tracks: readonly PreparedCandidate[]): string {
@@ -732,6 +750,7 @@ export function rankExternalCandidates(
       reason: reasonFor(prepared, slot.phase, options),
       score: round(scoreCandidate(prepared, slot, options, 0, 0), 3),
       inferredMood: prepared.inferred.canonical,
+      moodSignal: prepared.inferred.hasMoodSignal ? "metadata" : "neutral_default",
       links: makeLinks(prepared.candidate)
     };
   });

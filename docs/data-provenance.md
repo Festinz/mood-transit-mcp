@@ -10,6 +10,8 @@ The normal standalone path uses public ListenBrainz APIs, with a 10-minute in-me
 - optional artist radio when the caller supplies a MusicBrainz artist MBID;
 - a batch recording metadata request for MusicBrainz-backed title, artist, duration, recording/artist MBIDs, ISRC, release, year, and community tags.
 
+When the user explicitly names an artist or song, the standalone path also uses the official MusicBrainz search API. Artist names are matched against normalized names and aliases before an MBID-qualified recording search; requested song titles are checked for exact normalized equality. The result reports requested and matched names in `searchResolution` and does not silently claim an unmatched artist or title.
+
 ListenBrainz describes its public listen data and text as available under CC0. Its service terms and third-party resource notices remain applicable:
 
 - [ListenBrainz Terms of Service](https://listenbrainz.org/terms-of-service/)

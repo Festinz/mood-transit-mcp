@@ -12,6 +12,7 @@ export interface ExternalMusicCandidate {
   originalRank?: number;
   recordingMbid?: string;
   artistMbid?: string;
+  artistMbids?: string[];
   isrc?: string;
   releaseTitle?: string;
   releaseYear?: number;
@@ -27,9 +28,13 @@ export interface ExternalMusicCandidate {
 
 export interface TasteProfile {
   favoriteArtists?: string[];
+  resolvedArtistNames?: string[];
+  favoriteArtistMbids?: string[];
+  favoriteTracks?: string[];
   favoriteGenres?: string[];
   avoidArtists?: string[];
   avoidGenres?: string[];
+  artistScope?: "prefer" | "only";
   familiarVsDiscovery?: number;
   languagePreference?: "any" | "korean" | "international" | "instrumental";
   instrumentalOnly?: boolean;
@@ -41,6 +46,7 @@ export interface LiveJourneyTrack extends ExternalMusicCandidate {
   reason: string;
   score: number;
   inferredMood: CanonicalMood;
+  moodSignal: "metadata" | "neutral_default";
   links: {
     youtubeMusicSearch: string;
     melonSearch: string;
