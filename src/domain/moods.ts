@@ -37,7 +37,7 @@ const SYNONYMS: Record<string, CanonicalMood> = {
   anxious: "anxious", nervous: "anxious", stressed: "anxious", tense: "anxious", 불안: "anxious", 초조: "anxious", 긴장: "anxious", 스트레스: "anxious",
   tired: "tired", sleepy: "tired", exhausted: "tired", drained: "tired", 피곤: "tired", 지침: "tired", 졸림: "tired", 무기력: "tired",
   focused: "focused", focus: "focused", productive: "focused", concentrating: "focused", 집중: "focused", 몰입: "focused", 생산적: "focused",
-  hopeful: "hopeful", optimistic: "hopeful", encouraged: "hopeful", hopefuls: "hopeful", 희망: "hopeful", 기대: "hopeful", 용기: "hopeful", 위로: "hopeful",
+  hopeful: "hopeful", optimistic: "hopeful", encouraged: "hopeful", hopefuls: "hopeful", 희망: "hopeful", 기대: "hopeful", 용기: "hopeful", 위로: "hopeful", 기분전환: "hopeful",
   joyful: "joyful", happy: "joyful", cheerful: "joyful", delighted: "joyful", 행복: "joyful", 기쁨: "joyful", 신남: "joyful", 즐거움: "joyful",
   energetic: "energetic", pumped: "energetic", excited: "energetic", motivated: "energetic", 활기: "energetic", 에너지: "energetic", 의욕: "energetic", 들뜸: "energetic",
   angry: "angry", mad: "angry", furious: "angry", frustrated: "angry", 화남: "angry", 분노: "angry", 짜증: "angry", 답답: "angry",
