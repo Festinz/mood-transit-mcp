@@ -1,0 +1,15 @@
+MoodTransit(기분환승)
+
+Weather data is provided by Open-Meteo under the Creative Commons Attribution 4.0 International license.
+https://open-meteo.com/
+https://creativecommons.org/licenses/by/4.0/
+
+This prototype uses Open-Meteo's free non-commercial endpoint. A commercial deployment must move to
+an appropriate paid Open-Meteo plan or a self-hosted Open-Meteo deployment and retain attribution.
+
+Track records contain factual metadata only (title, artist, year, approximate duration and hand-curated
+recommendation attributes). Track identity, spelling, year, and duration were cross-checked against the
+public Apple Music/iTunes catalog and public discographies on 2026-07-12. Editorial energy, valence,
+acousticness, familiarity, mood, weather, and activity values are MoodTransit estimates, not official
+streaming metrics and not therapeutic claims. This repository contains no audio files, cover art, or lyrics.
+Outbound music links are search URLs generated from title and artist metadata.
