@@ -134,6 +134,17 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(live.isError).not.toBe(true);
       expect(live.structuredContent).toHaveProperty("selectionScope.kind", "public_open_catalog");
 
+      const liveState = live.structuredContent?.refinementState as Record<string, unknown>;
+      const liveRefined = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: { ...liveState, candidateSource: {} },
+          changes: { moodDirection: "brighter" }
+        }
+      });
+      expect(liveRefined.isError).not.toBe(true);
+      expect(liveRefined.structuredContent).toHaveProperty("revision", 1);
+
       const cityLive = await client.callTool({ name: "build_live_mood_journey", arguments: { currentMood: "울적", targetMood: "hopeful", city: "Seoul", activity: "commute", minutes: 20, preferences: { preferredGenres: ["k-pop"], discovery: "adventurous" } } });
       expect(cityLive.isError).not.toBe(true);
       expect((cityLive.content[0] as { text: string }).text).toContain("Open-Meteo");

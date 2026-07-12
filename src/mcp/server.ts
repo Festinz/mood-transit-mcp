@@ -62,6 +62,11 @@ const candidateSourceSchema = z.object({
   retrievedAt: z.string().datetime({ offset: true }).optional()
 }).strict();
 
+const refinementCandidateSourceSchema = z.union([
+  candidateSourceSchema,
+  z.object({}).strict()
+]).optional().transform((value) => value && "providerName" in value ? value : undefined);
+
 const arrangeCandidateSchema = z.object({
   providerTrackId: z.string().trim().min(1).max(128).optional(),
   title: z.string().trim().min(1).max(120),
@@ -134,7 +139,7 @@ const refinementStateSchema = z.object({
   revision: z.number().int().min(0).max(50),
   request: requestStateSchema,
   selectedTrackIds: stringList(18, 240),
-  candidateSource: candidateSourceSchema.optional(),
+  candidateSource: refinementCandidateSourceSchema,
   candidatePoolToken: z.string().min(1).max(16_000).regex(/^[A-Za-z0-9_-]+$/).optional()
 }).strict();
 
