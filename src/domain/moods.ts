@@ -31,13 +31,13 @@ export const MOOD_KOREAN_LABELS: Record<CanonicalMood, string> = {
 };
 
 const SYNONYMS: Record<string, CanonicalMood> = {
-  calm: "calm", peaceful: "calm", relaxed: "calm", serene: "calm", 편안: "calm", 편안함: "calm", 차분: "calm", 차분함: "calm", 평온: "calm", 안정: "calm",
+  calm: "calm", peaceful: "calm", relaxed: "calm", serene: "calm", 편안: "calm", 편안함: "calm", 차분: "calm", 차분함: "calm", 잔잔: "calm", 잔잔함: "calm", 평온: "calm", 안정: "calm",
   content: "content", okay: "content", neutral: "content", satisfied: "content", 무난: "content", 괜찮: "content", 만족: "content", 보통: "content",
-  sad: "sad", down: "sad", gloomy: "sad", blue: "sad", 슬픔: "sad", 슬퍼: "sad", 우울: "sad", 울적: "sad", 침울: "sad", 가라앉음: "sad", 가라앉: "sad", 안좋: "sad", 별로: "sad",
+  sad: "sad", down: "sad", gloomy: "sad", blue: "sad", 슬픔: "sad", 슬퍼: "sad", 슬픈: "sad", 우울: "sad", 울적: "sad", 침울: "sad", 가라앉음: "sad", 가라앉: "sad", 안좋: "sad", 별로: "sad",
   anxious: "anxious", nervous: "anxious", stressed: "anxious", tense: "anxious", 불안: "anxious", 초조: "anxious", 긴장: "anxious", 스트레스: "anxious",
   tired: "tired", sleepy: "tired", exhausted: "tired", drained: "tired", 피곤: "tired", 지침: "tired", 졸림: "tired", 무기력: "tired",
   focused: "focused", focus: "focused", productive: "focused", concentrating: "focused", 집중: "focused", 몰입: "focused", 생산적: "focused",
-  hopeful: "hopeful", optimistic: "hopeful", encouraged: "hopeful", hopefuls: "hopeful", 희망: "hopeful", 기대: "hopeful", 용기: "hopeful", 위로: "hopeful", 기분전환: "hopeful",
+  hopeful: "hopeful", optimistic: "hopeful", encouraged: "hopeful", uplifting: "hopeful", hopefuls: "hopeful", 희망: "hopeful", 기대: "hopeful", 용기: "hopeful", 위로: "hopeful", 기분전환: "hopeful",
   joyful: "joyful", happy: "joyful", cheerful: "joyful", delighted: "joyful", 행복: "joyful", 기쁨: "joyful", 신남: "joyful", 신나: "joyful", 즐거움: "joyful", 밝음: "joyful", 밝은: "joyful", 밝게: "joyful", 밝아: "joyful", 좋음: "joyful", 좋아: "joyful", 좋은: "joyful", 좋게: "joyful",
   energetic: "energetic", pumped: "energetic", excited: "energetic", motivated: "energetic", 활기: "energetic", 에너지: "energetic", 의욕: "energetic", 들뜸: "energetic",
   angry: "angry", mad: "angry", furious: "angry", frustrated: "angry", 화남: "angry", 분노: "angry", 짜증: "angry", 답답: "angry",
@@ -97,14 +97,25 @@ export interface MoodInterpretation {
 }
 
 function compact(value: string): string {
-  return value.trim().toLocaleLowerCase("en").replace(/[\s_-]+/g, "");
+  return value.trim().toLocaleLowerCase("en").replace(/[\s_'’-]+/g, "");
 }
 
 function isNegatedAt(value: string, index: number, length: number): boolean {
-  const before = value.slice(Math.max(0, index - 12), index);
-  const after = value.slice(index + length, index + length + 16);
-  return /(?:안|덜|not|no|without|avoid)$/iu.test(before)
-    || /^(?:하지(?:는)?않|지(?:는)?않|하지말|한건아니|한게아니|은아니|는아니|아니|말고|빼고|제외|싫)/iu.test(after);
+  const before = value.slice(Math.max(0, index - 48), index);
+  const after = value.slice(index + length, index + length + 72);
+
+  // A rejected rejection means the quality is wanted: "빼지 말고",
+  // "싫지 않아", or "don't dislike" must win over the broad guards below.
+  const doubleNegatedBefore = /(?:안|않|not|dont|donot)(?:싫어?|미워|hate|dislike|avoid|exclude|remove|skip)$/iu.test(before);
+  const doubleNegatedAfter = /^[\p{P}\p{S}]*(?:(?:하|한|스러운|로운|는|은|인|함))?(?:(?:곡|노래|음악|느낌|분위기|스타일|건|것|걸|거)(?:들)?)?(?:은|는|이|가|을|를|도|만)?(?:빼지말|빼지않을거|제외하지말|틀지않을수없|싫(?:은건|은게|지는?|지)않|싫(?:은건|은게)아니|안싫|원하지않지않|듣고싶지않지않|(?:추천|골라|찾아|틀어|재생|들려)(?:하|해|할|해줄|해도|해줘)?하지않을수없)/iu.test(after)
+    || /^[\p{P}\p{S}]*(?:(?:songs?|tracks?|music|vibes?)(?:i|we|is|are)?)?(?:dont|donot|not)(?:hate|dislike|avoid|exclude|remove|skip)/iu.test(after);
+  if (doubleNegatedBefore || doubleNegatedAfter) return false;
+
+  const rejectedBefore = /(?:안|덜|not|no|without|avoid|exclude|remove|skip|noneedfor|dont(?:really|actually|necessarily|particularly|ever|even|just|anymore){0,3}(?:want|need|play|recommend|suggest|find)|donot(?:really|actually|necessarily|particularly|ever|even|just|anymore){0,3}(?:want|need|play|recommend|suggest|find)|dontneed(?:any)?|donotrecommend|dontrecommend|dontplay|donotplay|wouldntrecommend|shouldntrecommend|notlookingfor|dontfeellike|donotfeellike|notinto|hate|dislike)$/iu.test(before);
+  const rejectedAfter = /^[\p{P}\p{S}]*(?:(?:하|한|스러운|로운|는|은|인|함))?(?:(?:곡|노래|음악|느낌|분위기|스타일|건|것|걸|거)(?:들)?)?(?:은|는|이|가|을|를|도|만)?(?:(?:너무)?(?:이라서|라서|여서|해서|하니까|니까|때문에|서))?(?:하지(?:는)?않|지(?:는)?않|하지말|한건아니|한게아니|은아니|는아니|아니|말고|마음에안들|(?:내)?(?:취향|스타일)(?:이|은|는)?아니|안(?:듣|원|찾|추천|골라|선호|좋아)|(?:추천|골라|찾아|틀어|재생|들려)(?:하|해|할|해줄|해도|해줘)?(?:은|는|이|가|을|를|도|만)?(?:(?:할)?필요(?:가|는)?없|하지(?:는|도)?(?:마|말|않)|안(?:해|할))|(?:할|해줄|들을)?필요(?:가|는)?없|빼(?!지말)|제외(?!하지말)|싫(?!지(?:는)?않|은(?:건|게)아니)|원하지(?:는|도)?않|듣고싶(?:지|진|지는)?않)/iu.test(after);
+  const englishRejectedAfter = /^[\p{P}\p{S}]*(?:(?:songs?|tracks?|music|vibes?)(?:i|we)?)?(?:not|unwanted|avoid|exclude|skip|remove|dontwant|donotwant|dontfeellike|donotfeellike|hate|dislike)/iu.test(after)
+    || /^[\p{P}\p{S}]*(?:(?:songs?|tracks?|music|vibes?))?(?:arent|isnt|arenot|isnot)(?:(?:what)?(?:i|we)(?:want|mlookingfor|amlookingfor)|my(?:thing|style|taste))/iu.test(after);
+  return rejectedBefore || rejectedAfter || englishRejectedAfter;
 }
 
 function includesUnnegated(value: string, term: string): boolean {

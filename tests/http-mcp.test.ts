@@ -36,6 +36,7 @@ const listenBrainzFetch = vi.fn<typeof fetch>(async (input) => {
 
 const RESCENE_MBID = "a54fd8e2-d319-44a6-aa60-21adf17751bf";
 const TWICE_MBID = "22222222-3333-4444-8555-666666666666";
+const FALL_OUT_BOY_MBID = "516cef4d-0718-4007-9939-f9b38af3f784";
 const stubArtists = {
   "리센느": {
     name: "RESCENE",
@@ -46,6 +47,11 @@ const stubArtists = {
     name: "TWICE",
     mbid: TWICE_MBID,
     titles: ["Feel Special", "CHEER UP", "What Is Love?", "ONE SPARK", "Strategy", "Dance The Night Away"]
+  },
+  "fall out boy": {
+    name: "Fall Out Boy",
+    mbid: FALL_OUT_BOY_MBID,
+    titles: ["Sugar, We're Goin Down", "Dance, Dance", "Thnks fr th Mmrs", "Centuries", "Uma Thurman", "My Songs Know What You Did in the Dark"]
   }
 } as const;
 
@@ -198,6 +204,33 @@ describe("HTTP service", () => {
       id: null
     }));
 
+    const playMcp = await request(app)
+      .post("/mcp")
+      .set("origin", "https://playmcp.kakao.com")
+      .set("accept", "application/json, text/event-stream")
+      .set("content-type", "application/json")
+      .send(initialize)
+      .expect(200);
+    expect(playMcp.headers["access-control-allow-origin"]).toBe("https://playmcp.kakao.com");
+    expect(playMcp.headers.vary).toContain("Origin");
+
+    await request(app)
+      .options("/mcp")
+      .set("origin", "https://playmcp.kakaocloud.io")
+      .set("access-control-request-method", "POST")
+      .expect(204)
+      .expect("Access-Control-Allow-Origin", "https://playmcp.kakaocloud.io");
+
+    for (const origin of ["https://evil.playmcp.kakao.com", "null"]) {
+      await request(app)
+        .post("/mcp")
+        .set("origin", origin)
+        .set("accept", "application/json, text/event-stream")
+        .set("content-type", "application/json")
+        .send(initialize)
+        .expect(403);
+    }
+
     const trustedApp = createApp({ allowedOrigins: ["https://trusted.example"] });
     await request(trustedApp)
       .post("/mcp")
@@ -250,7 +283,10 @@ describe("MCP SDK discovery and representative calls", () => {
         requestText: expect.any(Object),
         semanticIntent: expect.any(Object)
       }));
-      expect(buildTool?.description).toContain("ALWAYS copy");
+      const buildRequired = (buildTool?.inputSchema as { required?: string[] }).required ?? [];
+      expect(buildRequired).not.toContain("semanticIntent");
+      expect(buildRequired).not.toContain("minutes");
+      expect(buildTool?.description).toContain("Copy the complete utterance");
       const buildSchemaText = JSON.stringify(buildTool?.inputSchema);
       expect(buildSchemaText).toContain("[hH][uU][nN][tT][eE][rR]");
       expect(buildSchemaText).toContain("{0,4}");
@@ -413,6 +449,8 @@ describe("MCP SDK discovery and representative calls", () => {
         energy: 0.83,
         acousticness: 0.48
       });
+      expect(semanticDirectionalRefined.structuredContent).toHaveProperty("targetMood", "joyful");
+      expect(semanticDirectionalRefined.structuredContent).toHaveProperty("refinementState.request.targetMood", "joyful");
 
       const vibeRefined = await client.callTool({
         name: "refine_mood_journey",
@@ -464,6 +502,25 @@ describe("MCP SDK discovery and representative calls", () => {
         requestedArtists: ["리센느"],
         matchedArtists: ["RESCENE"]
       }));
+
+      const fallOutBoyLive = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "오늘 기분이 좋아 fall out boy 노래중 재밌는 거 추천해줘",
+          preferences: { preferredArtists: ["fall out boy"], artistScope: "only" }
+        }
+      });
+      expect(fallOutBoyLive.isError).not.toBe(true);
+      expect(fallOutBoyLive.structuredContent).toHaveProperty("requestedMinutes", 30);
+      expect(fallOutBoyLive.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+      expect(fallOutBoyLive.structuredContent).toHaveProperty("searchResolution", expect.objectContaining({
+        requestedArtists: ["fall out boy"],
+        matchedArtists: ["Fall Out Boy"]
+      }));
+      const fallOutBoyTracks = (fallOutBoyLive.structuredContent?.stages as Array<{ tracks: Array<{ artist: string }> }>)
+        .flatMap((stage) => stage.tracks);
+      expect(fallOutBoyTracks.length).toBeGreaterThanOrEqual(3);
+      expect(fallOutBoyTracks.every((track) => track.artist === "Fall Out Boy")).toBe(true);
 
       const multiArtistLive = await client.callTool({
         name: "build_live_mood_journey",
@@ -559,6 +616,34 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(refinementState).toHaveProperty("candidatePoolToken");
       expect(refinementState).not.toHaveProperty("candidatePool");
 
+      const arrangedWithoutSemanticIntent = await client.callTool({
+        name: "arrange_candidate_mood_journey",
+        arguments: {
+          requestText: "비 오는 퇴근길에 기분을 조금 밝게 바꿔줘",
+          candidateSource: { providerName: "Melon MCP" },
+          candidates: Array.from({ length: 7 }, (_, index) => ({
+            providerTrackId: `fallback-${index + 1}`,
+            title: `Fallback Candidate ${index + 1}`,
+            artist: `Fallback Artist ${index + 1}`,
+            durationSec: 180,
+            moodTags: index < 3 ? ["sad"] : ["hopeful"]
+          }))
+        }
+      });
+      expect(arrangedWithoutSemanticIntent.isError).not.toBe(true);
+      expect(arrangedWithoutSemanticIntent.structuredContent).toHaveProperty("requestedMinutes", 30);
+      expect(arrangedWithoutSemanticIntent.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+
+      const refinedWithoutSemanticIntent = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: arrangedWithoutSemanticIntent.structuredContent?.refinementState,
+          changes: { requestText: "첫 곡은 빼고 조금 더 밝게 바꿔줘", excludeTrackIds: ["fallback-1"] }
+        }
+      });
+      expect(refinedWithoutSemanticIntent.isError).not.toBe(true);
+      expect(refinedWithoutSemanticIntent.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+
       const refined = await client.callTool({
         name: "refine_mood_journey",
         arguments: {
@@ -595,19 +680,557 @@ describe("MCP SDK discovery and representative calls", () => {
       });
       expect(invalidAxes.isError).toBe(true);
 
+      const fallbackCallStart = listenBrainzFetch.mock.calls.length;
       const missingSemanticIntent = await client.callTool({
         name: "build_live_mood_journey",
         arguments: { requestText: "분노와 허탈함이 섞였는데 차갑고 단단하게 집중하고 싶어", minutes: 20 }
       });
-      expect(missingSemanticIntent.isError).toBe(true);
-      expect(missingSemanticIntent.structuredContent).toHaveProperty("error.code", "SEMANTIC_INTENT_REQUIRED");
+      expect(missingSemanticIntent.isError).not.toBe(true);
+      expect(missingSemanticIntent.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+      expect(missingSemanticIntent.structuredContent).toHaveProperty("interpretation.requestText", "분노와 허탈함이 섞였는데 차갑고 단단하게 집중하고 싶어");
+      const fallbackUrls = listenBrainzFetch.mock.calls.slice(fallbackCallStart)
+        .map(([input]) => input instanceof Request ? input.url : input.toString());
+      expect(fallbackUrls.every((url) => !decodeURIComponent(url).includes("허탈함"))).toBe(true);
 
       const emptySemanticIntent = await client.callTool({
         name: "build_live_mood_journey",
         arguments: { requestText: "빈 의미 객체로는 추측하지 마", semanticIntent: {}, minutes: 20 }
       });
-      expect(emptySemanticIntent.isError).toBe(true);
-      expect(emptySemanticIntent.structuredContent).toHaveProperty("error.code", "SEMANTIC_INTENT_REQUIRED");
+      expect(emptySemanticIntent.isError).not.toBe(true);
+      expect(emptySemanticIntent.structuredContent).toHaveProperty("interpretation.semanticSource", "legacy_compatibility");
+      expect(emptySemanticIntent.structuredContent).toHaveProperty("interpretation.semanticCoverage", "canonical_fallback");
+
+      const negatedActivity = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { requestText: "운동은 싫고 편안하게 쉬면서 들을 노래를 추천해줘" }
+      });
+      expect(negatedActivity.isError).not.toBe(true);
+      expect(negatedActivity.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+      const negatedActivityTags = (negatedActivity.structuredContent?.interpretation as { discoveryTags: string[] }).discoveryTags;
+      expect(negatedActivityTags).not.toContain("workout");
+      expect(negatedActivityTags).not.toContain("energetic");
+
+      const structuredNegatedActivity = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "운동은 싫고 산책하며 편안하게 듣고 싶어",
+          activity: "운동은 싫고 산책"
+        }
+      });
+      const structuredActivityTags = (structuredNegatedActivity.structuredContent?.interpretation as { discoveryTags: string[] }).discoveryTags;
+      expect(structuredActivityTags).toContain("walking");
+      expect(structuredActivityTags).not.toContain("workout");
+
+      const negatedWeather = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { requestText: "비 오는 날 노래는 싫고 화창한 날 같은 곡을 골라줘" }
+      });
+      expect(negatedWeather.isError).not.toBe(true);
+      expect(negatedWeather.structuredContent).toHaveProperty("interpretation.semanticSource", "legacy_compatibility");
+      expect(negatedWeather.structuredContent).toHaveProperty("interpretation.semanticCoverage", "canonical_fallback");
+      expect(negatedWeather.structuredContent).toHaveProperty("interpretation.discoveryTags", []);
+
+      const noSignalFallback = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { requestText: "아무 설명 없이 그냥 알아서 골라줘" }
+      });
+      expect(noSignalFallback.isError).not.toBe(true);
+      expect(noSignalFallback.structuredContent).toHaveProperty("interpretation.semanticSource", "legacy_compatibility");
+      expect(noSignalFallback.structuredContent).toHaveProperty("interpretation.semanticCoverage", "canonical_fallback");
+
+      for (const standaloneRejection of [
+        "우울한 건 마음에 안 들어",
+        "우울한 건 내 스타일이 아니야",
+        "I don't feel like sad songs",
+        "첫 곡이 별로야. 우울한 느낌이라 빼줘",
+        "우울한 노래 추천은 하지 마",
+        "우울한 노래를 추천하지는 말아줘",
+        "우울한 곡은 추천 안 해줘도 돼",
+        "I don't need any sad songs",
+        "I wouldn't recommend sad songs",
+        "Don't play sad songs",
+        "happy songs are not what I want",
+        "sad songs are not what I'm looking for",
+        "차분한 노래는 필요 없어",
+        "차분한 노래 추천할 필요 없어",
+        "차분한 건 원하지는 않아",
+        "차분한 노래는 듣고 싶진 않아",
+        "I don't really want sad songs",
+        "I do not really want sad songs",
+        "No need for sad songs",
+        "Anything but sad songs",
+        "I'd rather not listen to sad songs",
+        "I prefer not to hear sad songs",
+        "I'm not exactly looking for sad songs",
+        "I don't think that I really want sad songs",
+        "우울한 노래는 사양할게",
+        "신나는 노래는 내키지 않아",
+        "차분한 노래는 안 땡겨",
+        "차분한 노래를 바라는 건 아니야",
+        "우울한 노래를 추천해달라는 건 아니야",
+        "Sad songs? No thanks.",
+        "Sad songs? I would pass.",
+        "Sad songs? Hard pass.",
+        "Sad songs? Nope.",
+        "Keep sad songs off the list",
+        "I don't prefer sad over happy songs",
+        "슬픈 노래를 틀지 않을 거야",
+        "차분한 것보다 신나는 게 좋은 건 아니야",
+        "우울한 노래는 말자",
+        "우울한 노래는 넘기자",
+        "우울한 노래는 피하고 싶어",
+        "우울한 노래는 스킵",
+        "우울한 건 좀 그래",
+        "우울한 건 부담스러워",
+        "우울한 건 싫고 신나는 건 됐어",
+        "우울한 건 싫고 신나는 노래는 패스",
+        "sad songs are bad but happy songs? no thanks",
+        "not sad, but happy is not for me",
+        "Never play sad songs",
+        "Never recommend sad songs",
+        "Under no circumstances play sad songs",
+        "You should never play sad songs",
+        "I refuse to play sad songs",
+        "I don't mean sad rather than happy songs",
+        "우울한 노래 추천해주지 마",
+        "슬픈 노래 틀어주지 마",
+        "차분한 노래 들려주지 마",
+        "신나는 노래 재생해주지 마",
+        "우울한 노래는 됐어",
+        "우울한 노래는 패스"
+      ]) {
+        const rejectedStandalone = await client.callTool({
+          name: "build_live_mood_journey",
+          arguments: { requestText: standaloneRejection }
+        });
+        expect(rejectedStandalone.isError).not.toBe(true);
+        expect(rejectedStandalone.structuredContent).toHaveProperty("interpretation.semanticSource", "legacy_compatibility");
+        expect(rejectedStandalone.structuredContent).toHaveProperty("interpretation.semanticCoverage", "canonical_fallback");
+        expect(rejectedStandalone.structuredContent).toHaveProperty("interpretation.discoveryTags", []);
+      }
+
+      for (const [naturalRequest, expectedMood] of [
+        ["잔잔한 노래 틀어줘", "calm"],
+        ["좀 더 신나게", "joyful"],
+        ["슬픈 노래 좀", "sad"],
+        ["Sad music please", "sad"],
+        ["Give me happy songs", "joyful"],
+        ["Can you put on calm songs?", "calm"],
+        ["오늘 날씨가 더운데 시원한 플레이리스트를 찾아줘", "energetic"],
+        ["오늘 날씨가 더운 데 시원한 플레이리스트를 찾아줘", "energetic"],
+        ["너무 더워서 시원한 플레이리스트를 찾아줘", "energetic"],
+        ["기분이 가라앉았는데 신나는 플리", "joyful"],
+        ["편안해지는 음악", "calm"],
+        ["기분 좋아지는 노래", "joyful"],
+        ["Give me something cool and energetic", "energetic"],
+        ["I need uplifting music", "hopeful"]
+      ] as const) {
+        const naturalStandalone = await client.callTool({
+          name: "build_live_mood_journey",
+          arguments: { requestText: naturalRequest }
+        });
+        expect(naturalStandalone.isError).not.toBe(true);
+        expect(naturalStandalone.structuredContent, naturalRequest).toHaveProperty("targetMood", expectedMood);
+        expect(naturalStandalone.structuredContent, naturalRequest).toHaveProperty("interpretation.semanticSource", "server_inferred");
+      }
+
+      const romanticDateRequest = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { requestText: "로맨틱한 데이트 노래 추천해줘" }
+      });
+      expect(romanticDateRequest.isError).not.toBe(true);
+      expect(romanticDateRequest.structuredContent).toHaveProperty("targetMood", "romantic");
+      expect(romanticDateRequest.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+
+      const noSignalThenRecognized = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: noSignalFallback.structuredContent?.refinementState,
+          changes: { requestText: "이제 신나는 노래로 바꿔줘" }
+        }
+      });
+      expect(noSignalThenRecognized.isError).not.toBe(true);
+      expect(noSignalThenRecognized.structuredContent).toHaveProperty("targetMood", "joyful");
+      expect(noSignalThenRecognized.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+      expect(noSignalThenRecognized.structuredContent).toHaveProperty("interpretation.semanticCoverage", "partial");
+
+      const inferredInitial = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { requestText: "비 오는 날 차분한 노래로 골라줘" }
+      });
+      const reinferredFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredInitial.structuredContent?.refinementState,
+          changes: { requestText: "이제 비 노래는 싫고 운동할 때 신나는 걸로 바꿔줘" }
+        }
+      });
+      expect(reinferredFollowup.isError).not.toBe(true);
+      expect(reinferredFollowup.structuredContent).toHaveProperty("targetMood", "joyful");
+      expect(reinferredFollowup.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+      const reinferredTags = (reinferredFollowup.structuredContent?.interpretation as { discoveryTags: string[] }).discoveryTags;
+      expect(reinferredTags).not.toContain("rainy day");
+      expect(reinferredTags).not.toContain("workout");
+
+      const mixedFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredInitial.structuredContent?.refinementState,
+          changes: { targetSemantic: { valence: 0.82, energy: 0.71, acousticness: 0.3 } }
+        }
+      });
+      expect(mixedFollowup.isError).not.toBe(true);
+      expect(mixedFollowup.structuredContent).toHaveProperty("interpretation.semanticSource", "mixed");
+      expect(mixedFollowup.structuredContent).toHaveProperty("interpretation.semanticCoverage", "partial");
+
+      const hostSemanticInitial = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "기분을 신나게 올려줄 노래를 추천해줘",
+          semanticIntent: {
+            current: { valence: 0.2, energy: 0.25, acousticness: 0.7, label: "sad" },
+            target: { valence: 0.9, energy: 0.85, acousticness: 0.2, label: "joyful" },
+            discoveryTags: ["upbeat"]
+          }
+        }
+      });
+      const hostTextOnlyFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: hostSemanticInitial.structuredContent?.refinementState,
+          changes: { requestText: "이제 조용하고 차분한 노래로 바꿔줘" }
+        }
+      });
+      expect(hostTextOnlyFollowup.isError).not.toBe(true);
+      expect(hostTextOnlyFollowup.structuredContent).toHaveProperty("targetMood", "calm");
+      expect(hostTextOnlyFollowup.structuredContent).toHaveProperty("interpretation.semanticSource", "mixed");
+      expect(hostTextOnlyFollowup.structuredContent).toHaveProperty("interpretation.semanticCoverage", "partial");
+      expect((hostTextOnlyFollowup.structuredContent?.interpretation as { discoveryTags: string[] }).discoveryTags).not.toContain("upbeat");
+      expect(hostTextOnlyFollowup.structuredContent).toHaveProperty("refinementState.request.currentMood", "joyful");
+      expect(hostTextOnlyFollowup.structuredContent).toHaveProperty("refinementState.request.targetMood", "calm");
+
+      const mixedTextOnlyFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: mixedFollowup.structuredContent?.refinementState,
+          changes: { requestText: "이제 조용하고 차분한 노래로 바꿔줘" }
+        }
+      });
+      expect(mixedTextOnlyFollowup.isError).not.toBe(true);
+      expect(mixedTextOnlyFollowup.structuredContent).toHaveProperty("targetMood", "calm");
+      expect(mixedTextOnlyFollowup.structuredContent).toHaveProperty("interpretation.semanticSource", "mixed");
+      expect(mixedTextOnlyFollowup.structuredContent).toHaveProperty("interpretation.semanticCoverage", "partial");
+
+      const inferredTransition = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "우울한 기분에서 신나는 노래로 넘어가고 싶어",
+          currentMood: "sad",
+          targetMood: "joyful"
+        }
+      });
+      const inferredTransitionState = inferredTransition.structuredContent?.refinementState as {
+        request: { semanticIntent?: unknown };
+      };
+      const operationalFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredTransition.structuredContent?.refinementState,
+          changes: { requestText: "첫 곡만 빼고 다시 추천해줘" }
+        }
+      });
+      expect(operationalFollowup.isError).not.toBe(true);
+      expect(operationalFollowup.structuredContent).toHaveProperty("currentMood", "sad");
+      expect(operationalFollowup.structuredContent).toHaveProperty("targetMood", "joyful");
+      expect(operationalFollowup.structuredContent).toHaveProperty("interpretation.semanticSource", "server_inferred");
+      expect(operationalFollowup.structuredContent).toHaveProperty("interpretation.semanticCoverage", "partial");
+      expect(operationalFollowup.structuredContent).toHaveProperty(
+        "refinementState.request.semanticIntent",
+        inferredTransitionState.request.semanticIntent
+      );
+
+      const evaluationFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredTransition.structuredContent?.refinementState,
+          changes: { requestText: "첫 곡이 별로라서 빼고 다시 추천해줘" }
+        }
+      });
+      expect(evaluationFollowup.isError).not.toBe(true);
+      expect(evaluationFollowup.structuredContent).toHaveProperty("currentMood", "sad");
+      expect(evaluationFollowup.structuredContent).toHaveProperty("targetMood", "joyful");
+      expect(evaluationFollowup.structuredContent).toHaveProperty(
+        "refinementState.request.semanticIntent",
+        inferredTransitionState.request.semanticIntent
+      );
+
+      const rejectedMoodFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredTransition.structuredContent?.refinementState,
+          changes: { requestText: "우울한 곡은 빼고 다시 추천해줘" }
+        }
+      });
+      expect(rejectedMoodFollowup.isError).not.toBe(true);
+      expect(rejectedMoodFollowup.structuredContent).toHaveProperty("currentMood", "sad");
+      expect(rejectedMoodFollowup.structuredContent).toHaveProperty("targetMood", "joyful");
+      expect(rejectedMoodFollowup.structuredContent).toHaveProperty(
+        "refinementState.request.semanticIntent",
+        inferredTransitionState.request.semanticIntent
+      );
+
+      const acknowledgementFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredTransition.structuredContent?.refinementState,
+          changes: { requestText: "좋아, 첫 곡만 빼줘" }
+        }
+      });
+      expect(acknowledgementFollowup.isError).not.toBe(true);
+      expect(acknowledgementFollowup.structuredContent).toHaveProperty("currentMood", "sad");
+      expect(acknowledgementFollowup.structuredContent).toHaveProperty("targetMood", "joyful");
+      expect(acknowledgementFollowup.structuredContent).toHaveProperty(
+        "refinementState.request.semanticIntent",
+        inferredTransitionState.request.semanticIntent
+      );
+
+      for (const rejectedText of [
+        "우울한 노래는 안 듣고 싶어",
+        "우울한 곡들은 빼줘",
+        "우울함은 제외해줘",
+        "I don't want sad songs",
+        "sad songs I don't want",
+        "우울한 건 마음에 안 들어",
+        "우울한 건 내 스타일이 아니야",
+        "I don't feel like sad songs",
+        "happy songs aren't what I want",
+        "sad songs are not what I'm looking for",
+        "첫 곡이 별로야. 우울한 느낌이라 빼줘",
+        "우울한 노래 추천은 하지 마",
+        "우울한 노래를 추천하지는 말아줘",
+        "우울한 곡은 추천 안 해줘도 돼",
+        "I don't need any sad songs",
+        "I wouldn't recommend sad songs",
+        "Don't play sad songs",
+        "차분한 노래는 필요 없어",
+        "차분한 노래 추천할 필요 없어",
+        "차분한 건 원하지는 않아",
+        "차분한 노래는 듣고 싶진 않아",
+        "I don't really want sad songs",
+        "I do not really want sad songs",
+        "No need for sad songs",
+        "Anything but sad songs",
+        "I'd rather not listen to sad songs",
+        "I prefer not to hear sad songs",
+        "I'm not exactly looking for sad songs",
+        "I don't think that I really want sad songs",
+        "우울한 노래는 사양할게",
+        "신나는 노래는 내키지 않아",
+        "차분한 노래는 안 땡겨",
+        "차분한 노래를 바라는 건 아니야",
+        "우울한 노래를 추천해달라는 건 아니야",
+        "Sad songs? No thanks.",
+        "Sad songs? I would pass.",
+        "Sad songs? Hard pass.",
+        "Sad songs? Nope.",
+        "Keep sad songs off the list",
+        "I don't prefer sad over happy songs",
+        "슬픈 노래를 틀지 않을 거야",
+        "차분한 것보다 신나는 게 좋은 건 아니야",
+        "우울한 노래는 말자",
+        "우울한 노래는 넘기자",
+        "우울한 노래는 피하고 싶어",
+        "우울한 노래는 스킵",
+        "우울한 건 좀 그래",
+        "우울한 건 부담스러워",
+        "우울한 건 싫고 신나는 건 됐어",
+        "우울한 건 싫고 신나는 노래는 패스",
+        "sad songs are bad but happy songs? no thanks",
+        "not sad, but happy is not for me",
+        "Never play sad songs",
+        "Never recommend sad songs",
+        "Under no circumstances play sad songs",
+        "You should never play sad songs",
+        "I refuse to play sad songs",
+        "I don't mean sad rather than happy songs",
+        "우울한 노래 추천해주지 마",
+        "슬픈 노래 틀어주지 마",
+        "차분한 노래 들려주지 마",
+        "신나는 노래 재생해주지 마",
+        "우울한 노래는 됐어",
+        "우울한 노래는 패스"
+      ]) {
+        const rejectedQualityFollowup = await client.callTool({
+          name: "refine_mood_journey",
+          arguments: {
+            refinementState: inferredTransition.structuredContent?.refinementState,
+            changes: { requestText: rejectedText }
+          }
+        });
+        expect(rejectedQualityFollowup.isError).not.toBe(true);
+        expect(rejectedQualityFollowup.structuredContent).toHaveProperty("currentMood", "sad");
+        expect(rejectedQualityFollowup.structuredContent).toHaveProperty("targetMood", "joyful");
+        expect(rejectedQualityFollowup.structuredContent).toHaveProperty(
+          "refinementState.request.semanticIntent",
+          inferredTransitionState.request.semanticIntent
+        );
+      }
+
+      for (const [naturalRequest, expectedMood] of [
+        ["잔잔한 노래 틀어줘", "calm"],
+        ["좀 더 신나게", "joyful"],
+        ["슬픈 노래 좀", "sad"],
+        ["Sad music please", "sad"],
+        ["Give me happy songs", "joyful"],
+        ["Can you put on calm songs?", "calm"],
+        ["오늘 날씨가 더운데 시원한 플레이리스트를 찾아줘", "energetic"],
+        ["오늘 날씨가 더운 데 시원한 플레이리스트를 찾아줘", "energetic"],
+        ["너무 더워서 시원한 플레이리스트를 찾아줘", "energetic"],
+        ["기분이 가라앉았는데 신나는 플리", "joyful"],
+        ["편안해지는 음악", "calm"],
+        ["기분 좋아지는 노래", "joyful"],
+        ["Give me something cool and energetic", "energetic"],
+        ["I need uplifting music", "hopeful"]
+      ] as const) {
+        const naturalFollowup = await client.callTool({
+          name: "refine_mood_journey",
+          arguments: {
+            refinementState: inferredTransition.structuredContent?.refinementState,
+            changes: { requestText: naturalRequest }
+          }
+        });
+        expect(naturalFollowup.isError).not.toBe(true);
+        expect(naturalFollowup.structuredContent, naturalRequest).toHaveProperty("currentMood", "joyful");
+        expect(naturalFollowup.structuredContent, naturalRequest).toHaveProperty("targetMood", expectedMood);
+      }
+
+      const contrastTargetFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredTransition.structuredContent?.refinementState,
+          changes: { requestText: "신나는 곡은 빼고 차분한 곡으로 추천해줘" }
+        }
+      });
+      expect(contrastTargetFollowup.isError).not.toBe(true);
+      expect(contrastTargetFollowup.structuredContent).toHaveProperty("currentMood", "joyful");
+      expect(contrastTargetFollowup.structuredContent).toHaveProperty("targetMood", "calm");
+
+      const doubleNegativeFollowup = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredTransition.structuredContent?.refinementState,
+          changes: { requestText: "우울한 곡은 빼지 말고 추천해줘" }
+        }
+      });
+      expect(doubleNegativeFollowup.isError).not.toBe(true);
+      expect(doubleNegativeFollowup.structuredContent).toHaveProperty("currentMood", "joyful");
+      expect(doubleNegativeFollowup.structuredContent).toHaveProperty("targetMood", "sad");
+
+      for (const wantedDoubleNegative of ["신나는 건 싫은 건 아니야", "신나는 건 싫지는 않아"]) {
+        const wantedDoubleNegativeFollowup = await client.callTool({
+          name: "refine_mood_journey",
+          arguments: {
+            refinementState: inferredTransition.structuredContent?.refinementState,
+            changes: { requestText: wantedDoubleNegative }
+          }
+        });
+        expect(wantedDoubleNegativeFollowup.isError).not.toBe(true);
+        expect(wantedDoubleNegativeFollowup.structuredContent).toHaveProperty("currentMood", "joyful");
+        expect(wantedDoubleNegativeFollowup.structuredContent).toHaveProperty("targetMood", "joyful");
+      }
+
+      for (const contrastedTarget of [
+        "신나는 곡은 원하지 않지만 차분한 노래를 원해",
+        "I don't want happy songs and I want calm songs",
+        "I don't want sad songs, calm instead",
+        "신나는 거 말고 차분한 거",
+        "신나는 것보다 차분한 거",
+        "우울하지 않고 차분한 노래",
+        "슬프지 않은 차분한 노래 추천해줘"
+      ]) {
+        const contrastedTargetFollowup = await client.callTool({
+          name: "refine_mood_journey",
+          arguments: {
+            refinementState: inferredTransition.structuredContent?.refinementState,
+            changes: { requestText: contrastedTarget }
+          }
+        });
+        expect(contrastedTargetFollowup.isError).not.toBe(true);
+        expect(contrastedTargetFollowup.structuredContent).toHaveProperty("currentMood", "joyful");
+        expect(contrastedTargetFollowup.structuredContent).toHaveProperty("targetMood", "calm");
+      }
+
+      for (const joyfulContrast of [
+        "차분한 노래 대신 신나는 노래",
+        "우울한 노래 추천해줘 말고 신나는 노래",
+        "우울한 노래를 추천해달라는 건 아니고 신나는 노래 추천해줘",
+        "차분한 것보다 신나는 거",
+        "우울한 건 됐고 신나는 노래",
+        "우울한 곡은 됐고 신나는 걸로",
+        "우울한 건 그만, 신나는 노래"
+      ]) {
+        const joyfulContrastFollowup = await client.callTool({
+          name: "refine_mood_journey",
+          arguments: {
+            refinementState: inferredTransition.structuredContent?.refinementState,
+            changes: { requestText: joyfulContrast }
+          }
+        });
+        expect(joyfulContrastFollowup.isError).not.toBe(true);
+        expect(joyfulContrastFollowup.structuredContent).toHaveProperty("currentMood", "joyful");
+        expect(joyfulContrastFollowup.structuredContent).toHaveProperty("targetMood", "joyful");
+      }
+
+      for (const sadComparison of [
+        "sad rather than happy songs",
+        "sad instead of happy songs",
+        "I prefer sad over happy songs",
+        "Why not play sad songs?",
+        "Sad songs are not bad",
+        "우울한 노래도 나쁘지 않아",
+        "슬픈 노래를 틀지 않을 수 없어",
+        "우울한 노래를 빼지 않을 거야"
+      ]) {
+        const sadComparisonFollowup = await client.callTool({
+          name: "refine_mood_journey",
+          arguments: {
+            refinementState: inferredTransition.structuredContent?.refinementState,
+            changes: { requestText: sadComparison }
+          }
+        });
+        expect(sadComparisonFollowup.isError).not.toBe(true);
+        expect(sadComparisonFollowup.structuredContent, sadComparison).toHaveProperty("currentMood", "joyful");
+        expect(sadComparisonFollowup.structuredContent, sadComparison).toHaveProperty("targetMood", "sad");
+      }
+
+      const dislikedThenCalm = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: inferredTransition.structuredContent?.refinementState,
+          changes: { requestText: "신나는 노래는 싫은데 차분한 거" }
+        }
+      });
+      expect(dislikedThenCalm.isError).not.toBe(true);
+      expect(dislikedThenCalm.structuredContent).toHaveProperty("currentMood", "joyful");
+      expect(dislikedThenCalm.structuredContent).toHaveProperty("targetMood", "calm");
+
+      for (const affirmativeDoubleNegative of [
+        "신나는 노래를 대신 추천해줘",
+        "신나는 노래를 추천하지 않을 수 없어",
+        "don't not play happy songs",
+        "can't not play happy songs"
+      ]) {
+        const affirmativeDoubleNegativeFollowup = await client.callTool({
+          name: "refine_mood_journey",
+          arguments: {
+            refinementState: inferredTransition.structuredContent?.refinementState,
+            changes: { requestText: affirmativeDoubleNegative }
+          }
+        });
+        expect(affirmativeDoubleNegativeFollowup.isError).not.toBe(true);
+        expect(affirmativeDoubleNegativeFollowup.structuredContent, affirmativeDoubleNegative).toHaveProperty("currentMood", "joyful");
+        expect(affirmativeDoubleNegativeFollowup.structuredContent, affirmativeDoubleNegative).toHaveProperty("targetMood", "joyful");
+      }
 
       const sensitiveCatalogTag = await client.callTool({
         name: "build_live_mood_journey",

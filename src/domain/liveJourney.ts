@@ -131,6 +131,8 @@ export interface RankExternalCandidatesOptions extends PlanLiveJourneyBriefOptio
   candidateSource?: LiveJourney["candidateSource"];
   requestText?: string;
   semanticIntent?: SemanticIntent;
+  semanticIntentSource?: "host_supplied" | "server_inferred" | "mixed";
+  semanticCoverage?: SemanticCoverage;
 }
 
 interface InferredMood {
@@ -866,7 +868,8 @@ export function rankExternalCandidates(
       ...(options.activity?.trim() ? { activity: options.activity.trim() } : {}),
       ...(options.requestText === undefined ? {} : { requestText: options.requestText }),
       ...(options.semanticIntent ? { semanticIntent: cloneSemanticIntent(options.semanticIntent) } : {}),
-      semanticCoverage: semanticCoverage(options.semanticIntent),
+      ...(options.semanticIntentSource ? { semanticIntentSource: options.semanticIntentSource } : {}),
+      semanticCoverage: options.semanticCoverage ?? semanticCoverage(options.semanticIntent),
       sourceNote: `Ranked ${selectionPool.length} of ${pool.length} unique tracks supplied by external providers. Missing durations use a ${DEFAULT_DURATION_SEC}-second planning estimate.`
     },
     tracks

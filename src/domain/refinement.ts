@@ -1,4 +1,4 @@
-import type { SemanticIntent, SemanticPoint, TasteProfile } from "./liveTypes.js";
+import type { SemanticCoverage, SemanticIntent, SemanticPoint, TasteProfile } from "./liveTypes.js";
 
 export type JourneySourceMode = "live_open_catalog" | "provided_candidates";
 
@@ -14,6 +14,8 @@ export interface JourneyRequestState {
   minutes: number;
   requestText?: string;
   semanticIntent?: SemanticIntent;
+  semanticIntentSource?: "host_supplied" | "server_inferred" | "mixed";
+  semanticCoverage?: SemanticCoverage;
   weather?: string;
   weatherSource?: "provided" | "open-meteo";
   desiredVibe?: string;

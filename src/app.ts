@@ -12,6 +12,11 @@ export interface AppOptions {
   allowedOrigins?: readonly string[];
 }
 
+const PLAYMCP_BROWSER_ORIGINS = [
+  "https://playmcp.kakao.com",
+  "https://playmcp.kakaocloud.io"
+] as const;
+
 function normalizeAllowedOrigin(value: string): string {
   const url = new URL(value);
   if (
@@ -28,7 +33,8 @@ function normalizeAllowedOrigin(value: string): string {
 }
 
 function configuredOrigins(explicit?: readonly string[]): ReadonlySet<string> {
-  const values = explicit ?? (process.env.MCP_ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  const configured = explicit ?? (process.env.MCP_ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  const values = [...PLAYMCP_BROWSER_ORIGINS, ...configured];
   return new Set(values.map(normalizeAllowedOrigin));
 }
 
@@ -65,7 +71,19 @@ export function createApp(options: AppOptions = {}): express.Express {
     const origin = req.get("origin");
     // Non-browser MCP clients (including remote server-to-server calls) normally
     // omit Origin. The MCP transport requirement applies when the header exists.
-    if (origin === undefined || originAllowed(req, origin, allowedOrigins)) {
+    if (origin === undefined) {
+      next();
+      return;
+    }
+    if (originAllowed(req, origin, allowedOrigins)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, MCP-Protocol-Version, MCP-Session-Id");
+      if (req.method === "OPTIONS") {
+        res.status(204).end();
+        return;
+      }
       next();
       return;
     }

@@ -174,7 +174,7 @@ async function main(): Promise<void> {
     TOOL_NAMES.map((name) => [name, { cold: [], warm: [], concurrent: [] }])
   ) as unknown as Record<ToolName, Record<Phase, Sample[]>>;
 
-  const client = new Client({ name: "mood-transit-endpoint-benchmark", version: "2.3.0" });
+  const client = new Client({ name: "mood-transit-endpoint-benchmark", version: "2.3.1" });
   const connectStarted = performance.now();
   await client.connect(new StreamableHTTPClientTransport(endpoint));
   const connectMs = performance.now() - connectStarted;

@@ -238,7 +238,11 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     limitations.push(`선택 곡 메타데이터에서 직접 확인하지 못한 동적 태그: ${journey.context.unmatchedSemanticTags.join(", ")}`);
   }
   if (journey.context.semanticIntent) {
-    limitations.push("연속 감정 좌표와 동적 음악 태그는 대화 모델이 사용자 원문에서 해석한 soft preference이며 공급자의 공식 음향 특성이 아닙니다.");
+    limitations.push(journey.context.semanticIntentSource === "server_inferred"
+      ? "대화 모델이 연속 의미 필드를 생략해 서버가 원문에서 확인한 기분 표현과 안전한 고정 음악 태그로 보완 해석했습니다. 공급자의 공식 음향 특성은 아닙니다."
+      : journey.context.semanticIntentSource === "mixed"
+        ? "연속 의미 필드에는 서버 보완값과 대화 모델의 후속 해석이 함께 포함되어 있으며 공급자의 공식 음향 특성이 아닙니다."
+        : "연속 감정 좌표와 동적 음악 태그는 대화 모델이 사용자 원문에서 해석한 soft preference이며 공급자의 공식 음향 특성이 아닙니다.");
   } else if (journey.context.requestText) {
     limitations.push("호스트가 자유 문장의 연속 의미 좌표·동적 태그를 제공하지 않아 기존 감정 앵커와 일반 공개 검색으로 해석했습니다.");
   }
@@ -280,7 +284,8 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     durationBasis,
     context: journey.context,
     interpretation: {
-      semanticSource: journey.context.semanticIntent ? "host_supplied" : "legacy_compatibility",
+      semanticSource: journey.context.semanticIntentSource
+        ?? (journey.context.semanticIntent ? "host_supplied" : "legacy_compatibility"),
       semanticCoverage: journey.context.semanticCoverage ?? "canonical_fallback",
       canonicalAnchors: { current: journey.currentMood, target: journey.targetMood },
       ...(journey.context.requestText ? { requestText: journey.context.requestText } : {}),

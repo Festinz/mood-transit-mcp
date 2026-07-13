@@ -36,7 +36,7 @@
 
 ## 도구 심사 설명 요약
 
-- `build_live_mood_journey`: 다른 음악 MCP의 후보가 없을 때 사용합니다. 전체 사용자 문장을 `requestText`로 보존하고 반드시 `semanticIntent`의 연속 current/target 좌표와 짧은 소문자 영어 검색·제외 태그를 함께 전달합니다. 원문만 오면 잘못 추측하지 않고 `SEMANTIC_INTENT_REQUIRED`로 재호출을 요구합니다. 서버는 연속 좌표로 실제 3단계 경로를 계산하며, 선택 곡 메타데이터에서 확인하지 못한 동적 태그는 `unmatchedSemanticTags`와 `contextMatchMode=broadened`로 밝힙니다. 두 의미 필드가 모두 없는 구형 호출만 `canonical_fallback`으로 처리합니다.
+- `build_live_mood_journey`: 다른 음악 MCP의 후보가 없을 때 사용합니다. 전체 사용자 문장을 `requestText`로 보존하고, 가능하면 `semanticIntent`의 연속 current/target 좌표와 짧은 영어 검색·제외 태그를 함께 전달합니다. 의미 필드가 빠져도 서버가 원문에서 부정되지 않은 기분·감각 표현과 전용 날씨·활동 필드만 고정 허용 태그로 보완해 실패 없이 처리합니다. 의미 신호를 확인할 수 없으면 임의 추측 없이 `canonical_fallback`을 표시합니다. 서버는 연속 좌표로 실제 3단계 경로를 계산하며, 선택 곡 메타데이터에서 확인하지 못한 동적 태그는 `unmatchedSemanticTags`와 `contextMatchMode=broadened`로 표시합니다.
 - `arrange_candidate_mood_journey`: 공식 Melon MCP나 사용자가 활성화한 YouTube Data MCP 등 음악 도구가 먼저 반환한 3~20개 후보만 재배열합니다. Melon 요청은 `search_melon_music_contents`, YouTube 요청은 `search_videos` 또는 `search_playlists`로 실제 후보를 먼저 받은 뒤 title, artist, 공급자 ID, 정규화된 URL, 원래 순위를 보존해 전달합니다. 기분환승이 해당 공급자의 전체 카탈로그에 직접 접근했다고 주장하지 않습니다.
 - `refine_mood_journey`: 앞선 결과의 `structuredContent.refinementState`를 그대로 받아 밝기·에너지·익숙함/발견·시간·제외곡·회피 아티스트를 반영합니다. `live_open_catalog`이면 공개 후보를 다시 조회할 수 있고, `provided_candidates`이면 상태값 안의 압축된 공급자 후보 묶음 밖의 곡을 추가하지 않습니다. 서버에 사용자별 대화 상태를 저장하지 않습니다.
 - 세 도구는 모두 읽기 전용·비파괴이며 음원·가사·앨범아트를 반환하거나 저장하지 않습니다. 계정, 개인 청취 기록, API 키, OAuth token을 수집하지 않습니다.

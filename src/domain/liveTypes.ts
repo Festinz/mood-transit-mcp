@@ -91,6 +91,7 @@ export interface LiveJourney {
     activity?: string;
     requestText?: string;
     semanticIntent?: SemanticIntent;
+    semanticIntentSource?: "host_supplied" | "server_inferred" | "mixed";
     semanticCoverage?: SemanticCoverage;
     sourceNote?: string;
   };

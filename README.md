@@ -4,7 +4,7 @@
 
 정상 동작에서는 [ListenBrainz](https://listenbrainz.org/)와 [MusicBrainz](https://musicbrainz.org/) 공개 데이터에서 요청 조건에 맞는 후보를 가져와 취향·기분·활동·날씨·분위기·시간에 맞춰 재순위화합니다. PlayMCP 호스트는 사용자의 전체 문장을 `requestText`로 보존하고, 사전에 없는 감정·비유·부정·소리 질감까지 0~1 연속 의미 좌표와 짧은 동적 음악 태그로 `semanticIntent`에 전달합니다. 12개 감정은 더 이상 입력 허용 목록이 아니라 결과 표시와 구버전 호환용 anchor일 뿐이며, 실제 Mirror → Bridge → Arrive 계산은 전달된 연속 좌표를 따라갑니다.
 
-공개 검색 경로는 단순히 먼저 3곡을 반환한 쪽을 채택하지 않고, 실제 필터·3단계 구성·날씨/분위기 태그 일치 여부를 확인합니다. 부정된 질감은 `excludeTags`로 후보에서 제외하고, 야간 운전·공부·운동 같은 자유 활동도 검색 태그에 반영합니다. 원문이 있는데 의미 해석이 빠진 호출은 엉뚱한 기본 추천 대신 `SEMANTIC_INTENT_REQUIRED`를 반환합니다. 원문과 의미 해석을 모두 생략한 구형 호출은 기존 감정 anchor로 계속 처리하며 `semanticCoverage=canonical_fallback`을 표시합니다. 결과는 선택 곡 메타데이터에서 직접 확인된/확인되지 않은 동적 태그도 구분합니다. 아티스트 이름은 한글·영문 이름과 MusicBrainz 별칭으로 해석하고, 사용자가 지정한 곡명은 공개 recording 검색으로 확인합니다. 같은 요청은 10분 동안 공개 데이터 캐시를 재사용합니다.
+공개 검색 경로는 단순히 먼저 3곡을 반환한 쪽을 채택하지 않고, 실제 필터·3단계 구성·날씨/분위기 태그 일치 여부를 확인합니다. 부정된 질감은 `excludeTags`로 후보에서 제외하고, 야간 운전·공부·운동 같은 자유 활동도 검색 태그에 반영합니다. 호스트가 `semanticIntent`를 빠뜨려도 요청을 실패시키지 않고, 서버가 원문에서 부정되지 않은 것으로 확인한 기분·감각 표현과 전용 날씨·활동 필드만 고정 허용 태그와 연속 좌표로 안전하게 보완하며 `semanticSource=server_inferred`를 표시합니다. 의미 신호를 확인할 수 없는 원문은 임의로 태그화하지 않고 `canonical_fallback`으로 처리합니다. 결과는 선택 곡 메타데이터에서 직접 확인된/확인되지 않은 동적 태그도 구분합니다. 아티스트 이름은 한글·영문 이름과 MusicBrainz 별칭으로 해석하고, 사용자가 지정한 곡명은 공개 recording 검색으로 확인합니다. 같은 요청은 10분 동안 공개 데이터 캐시를 재사용합니다.
 
 공개/fallback 후보의 YouTube Music과 Melon 검색 링크는 각 곡의 `title + artist`로 생성합니다. 공급자가 URL을 전달한 곡은 실제 호스트명이 붙은 전달 링크를 표시합니다. 서버는 YouTube·YouTube Music·Melon의 내부 API를 호출하거나 스크래핑하지 않으며, 해당 서비스의 전체 카탈로그·재생 가능 여부·개인 청취 기록에 접근한다고 주장하지 않습니다.
 
@@ -123,8 +123,8 @@ MCP_URL=http://127.0.0.1:8000/mcp REQUIRE_LIVE_CATALOG=1 npm run benchmark:endpo
 ## Docker / PlayMCP in KC
 
 ```bash
-docker build --platform linux/amd64 -t mood-transit-mcp:2.3.0 .
-docker run --rm -p 8000:8000 mood-transit-mcp:2.3.0
+docker build --platform linux/amd64 -t mood-transit-mcp:2.3.1 .
+docker run --rm -p 8000:8000 mood-transit-mcp:2.3.1
 ```
 
 컨테이너 포트는 `8000`입니다. API 키·OAuth·secret은 필요하지 않습니다. 공개 HTTPS endpoint 끝에 `/mcp`를 붙여 PlayMCP에 등록합니다.

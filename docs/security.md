@@ -13,13 +13,13 @@
 
 - The JSON request body is limited to 64 KiB and parsed in strict mode.
 - Tool schemas are strict objects with bounded string lengths, array counts, numeric ranges, enums, URLs, and MusicBrainz UUID formats.
-- `requestText` is provenance only. When it is present, a meaningful bounded `semanticIntent` must accompany it or the tool returns `SEMANTIC_INTENT_REQUIRED` instead of silently using neutral defaults.
+- `requestText` is provenance only and is never forwarded verbatim to a catalog. When `semanticIntent` is absent or empty, the server maps only negation-aware mood/sensory matches from the text plus dedicated weather/activity fields to fixed allowlisted tags. No-signal text stays on canonical fallback instead of manufacturing full semantic coverage.
 - Semantic discovery/exclusion tags are limited to one to five English catalog words. Explicit genre preferences and refinement-state context tags use the same outbound safety boundary (with Korean catalog words and legacy casing also allowed, then normalized). The schema-visible pattern rejects common credential/secret markers, explicit name/address and request-copy markers, personal numeric identifiers, AWS/OpenAI-style key forms, long opaque tokens, and mixed alphanumeric identifiers before a network request. This is a common-pattern defense rather than perfect prose or PII classification. Unknown legacy mood/activity sentences are never used as outbound tags.
 - Unknown object keys are rejected.
 - Journey duration is limited to 10–60 whole minutes.
 - Supplied provider candidates are limited to 3–20 items. Their follow-up pool is carried in a checksummed compressed token capped at 16,000 characters and 64 KiB after inflation; it is never stored server-side.
 - The Streamable HTTP transport is stateless and has no session fixation surface or server-side session database.
-- If an HTTP `Origin` header is present, it must match an explicit allowlist. Same-host loopback origins are allowed only for local development. Server-to-server MCP clients normally omit this header.
+- If an HTTP `Origin` header is present, it must match the exact PlayMCP browser origins, an explicit additional allowlist, or the same-host loopback rule for local development. Allowed browser origins receive bounded MCP CORS headers; arbitrary origins remain blocked. Server-to-server MCP clients normally omit this header.
 - Server and tool identifiers are checked to avoid prohibited naming patterns.
 
 ## Outbound request and SSRF controls
