@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createMcpServer, SERVER_VERSION } from "./mcp/server.js";
+import { createMcpServer, LiveCandidateDiscoveryCache, SERVER_VERSION } from "./mcp/server.js";
 import { ListenBrainzService } from "./services/listenbrainz.js";
 import { MusicBrainzService } from "./services/musicbrainz.js";
 import { WeatherService } from "./services/weather.js";
@@ -57,6 +57,7 @@ export function createApp(options: AppOptions = {}): express.Express {
   const weatherService = options.weatherService ?? new WeatherService();
   const listenBrainzService = options.listenBrainzService ?? new ListenBrainzService();
   const musicBrainzService = options.musicBrainzService ?? new MusicBrainzService();
+  const liveDiscoveryCache = new LiveCandidateDiscoveryCache();
   const allowedOrigins = configuredOrigins(options.allowedOrigins);
   app.disable("x-powered-by");
 
@@ -89,7 +90,7 @@ export function createApp(options: AppOptions = {}): express.Express {
   });
 
   app.post("/mcp", async (req, res, next) => {
-    const server = createMcpServer(weatherService, listenBrainzService, musicBrainzService);
+    const server = createMcpServer(weatherService, listenBrainzService, musicBrainzService, liveDiscoveryCache);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true

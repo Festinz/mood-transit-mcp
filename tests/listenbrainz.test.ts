@@ -96,7 +96,7 @@ describe("ListenBrainz service", () => {
       expect(url.origin).toBe("https://api.listenbrainz.org");
       expect(init.redirect).toBe("error");
       const headers = new Headers(init.headers);
-      expect(headers.get("user-agent")).toContain("MoodTransit/2.2");
+      expect(headers.get("user-agent")).toContain("MoodTransit/2.3");
       expect(headers.get("accept")).toBe("application/json");
 
       if (url.pathname === "/1/lb-radio/tags") {

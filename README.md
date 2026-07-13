@@ -2,7 +2,9 @@
 
 현재 기분을 비슷한 곡으로 덮거나 바로 정반대 분위기로 점프하지 않고, **Mirror → Bridge → Arrive** 순서로 이동시키는 음악 큐레이션 MCP 서버입니다.
 
-정상 동작에서는 [ListenBrainz](https://listenbrainz.org/)와 [MusicBrainz](https://musicbrainz.org/) 공개 데이터에서 요청 조건에 맞는 후보를 가져와 취향·기분·활동·날씨·분위기·시간에 맞춰 재순위화합니다. 감정을 말하지 않은 날씨·분위기 전용 요청도 받을 수 있고, `더운`·`시원한`·`청량한` 같은 감각 표현은 날씨와 음악 검색 태그로 분리합니다. 공개 검색 경로는 단순히 먼저 3곡을 반환한 쪽을 채택하지 않고, 실제 필터·3단계 구성·날씨/분위기 태그 일치 여부를 확인한 뒤 필요할 때 다음 경로를 조회합니다. 아티스트 이름은 한글·영문 이름과 MusicBrainz 별칭으로 해석하고, 사용자가 지정한 곡명은 공개 recording 검색으로 확인합니다. 같은 요청은 10분 동안 공개 데이터 캐시를 재사용합니다. 2026-07 기준 MusicBrainz에는 약 3,942만 recording이 등록돼 있지만, 커뮤니티 카탈로그이므로 전 세계 모든 발매를 보장하지는 않습니다.
+정상 동작에서는 [ListenBrainz](https://listenbrainz.org/)와 [MusicBrainz](https://musicbrainz.org/) 공개 데이터에서 요청 조건에 맞는 후보를 가져와 취향·기분·활동·날씨·분위기·시간에 맞춰 재순위화합니다. PlayMCP 호스트는 사용자의 전체 문장을 `requestText`로 보존하고, 사전에 없는 감정·비유·부정·소리 질감까지 0~1 연속 의미 좌표와 짧은 동적 음악 태그로 `semanticIntent`에 전달합니다. 12개 감정은 더 이상 입력 허용 목록이 아니라 결과 표시와 구버전 호환용 anchor일 뿐이며, 실제 Mirror → Bridge → Arrive 계산은 전달된 연속 좌표를 따라갑니다.
+
+공개 검색 경로는 단순히 먼저 3곡을 반환한 쪽을 채택하지 않고, 실제 필터·3단계 구성·날씨/분위기 태그 일치 여부를 확인합니다. 부정된 질감은 `excludeTags`로 후보에서 제외하고, 야간 운전·공부·운동 같은 자유 활동도 검색 태그에 반영합니다. 원문이 있는데 의미 해석이 빠진 호출은 엉뚱한 기본 추천 대신 `SEMANTIC_INTENT_REQUIRED`를 반환합니다. 원문과 의미 해석을 모두 생략한 구형 호출은 기존 감정 anchor로 계속 처리하며 `semanticCoverage=canonical_fallback`을 표시합니다. 결과는 선택 곡 메타데이터에서 직접 확인된/확인되지 않은 동적 태그도 구분합니다. 아티스트 이름은 한글·영문 이름과 MusicBrainz 별칭으로 해석하고, 사용자가 지정한 곡명은 공개 recording 검색으로 확인합니다. 같은 요청은 10분 동안 공개 데이터 캐시를 재사용합니다.
 
 공개/fallback 후보의 YouTube Music과 Melon 검색 링크는 각 곡의 `title + artist`로 생성합니다. 공급자가 URL을 전달한 곡은 실제 호스트명이 붙은 전달 링크를 표시합니다. 서버는 YouTube·YouTube Music·Melon의 내부 API를 호출하거나 스크래핑하지 않으며, 해당 서비스의 전체 카탈로그·재생 가능 여부·개인 청취 기록에 접근한다고 주장하지 않습니다.
 
@@ -10,7 +12,7 @@
 
 | 도구 | 사용 시점 | 후보 범위 |
 | --- | --- | --- |
-| `build_live_mood_journey` | 다른 음악 MCP 후보가 없을 때 | 기분·날씨·분위기·장르와 명시한 아티스트·곡명에 맞는 ListenBrainz·MusicBrainz 공개 후보(10분 캐시 가능) |
+| `build_live_mood_journey` | 다른 음악 MCP 후보가 없을 때 | 자유 문장 연속 의미·동적 태그·날씨·활동과 명시한 아티스트·곡명에 맞는 ListenBrainz·MusicBrainz 공개 후보(10분 캐시 가능) |
 | `arrange_candidate_mood_journey` | 공식 Melon MCP나 사용자가 활성화한 YouTube Data MCP 등 다른 도구가 후보를 반환한 뒤 | 전달받은 후보 묶음만 재배열 |
 | `refine_mood_journey` | 직전 결과를 더 밝게·차분하게·익숙하게·새롭게 수정 | 제공자 mode는 전달 후보 범위를 보존하고 live mode는 공개 후보를 재조회 |
 
@@ -29,7 +31,7 @@
 - 선호·회피 아티스트와 장르, 명시한 곡명, 아티스트 한정 여부
 - 한국어·국제·연주곡 선호
 - 익숙한 곡과 새로운 발견의 균형
-- 현재·목표 기분, 원하는 음악 분위기, 활동, 날씨, 가용 시간
+- 사용자 원문, 현재·목표의 연속 감정 좌표, 원하는/피할 동적 음악 태그, 활동, 날씨, 가용 시간
 - 후속 대화의 제외곡·밝기·에너지 피드백
 
 계정이나 청취 기록은 저장하지 않습니다. PlayMCP 도구함에 공식 Melon MCP를 함께 넣으면 AI가 Melon의 검색·개인 추천 도구에서 후보를 받은 뒤 `arrange_candidate_mood_journey`로 넘길 수 있습니다. 사용자가 별도로 활성화한 YouTube Data MCP도 같은 방식으로 검색 결과를 넘길 수 있습니다. 기분환승은 전달된 후보만 3단계로 재배열하고 ID와 의미상 같은 정규화 URL을 보존합니다.
@@ -121,8 +123,8 @@ MCP_URL=http://127.0.0.1:8000/mcp REQUIRE_LIVE_CATALOG=1 npm run benchmark:endpo
 ## Docker / PlayMCP in KC
 
 ```bash
-docker build --platform linux/amd64 -t mood-transit-mcp:2.2.0 .
-docker run --rm -p 8000:8000 mood-transit-mcp:2.2.0
+docker build --platform linux/amd64 -t mood-transit-mcp:2.3.0 .
+docker run --rm -p 8000:8000 mood-transit-mcp:2.3.0
 ```
 
 컨테이너 포트는 `8000`입니다. API 키·OAuth·secret은 필요하지 않습니다. 공개 HTTPS endpoint 끝에 `/mcp`를 붙여 PlayMCP에 등록합니다.

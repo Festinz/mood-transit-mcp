@@ -2,6 +2,14 @@
 
 MoodTransit separates candidate discovery, factual metadata, editorial ranking, provider availability, and weather provenance. A result states which candidate scope was actually used and does not imply access to a complete streaming catalog.
 
+## Free-text semantic interpretation
+
+For natural-language calls, the PlayMCP host is instructed to preserve the complete user utterance in `requestText` and convert its meaning into bounded `semanticIntent` data: optional current/target valence, energy, and acousticness axes plus up to eight concise English discovery tags and eight exclusion tags. This allows unfamiliar feelings, metaphor, negation, activity, and sound texture to cross the MCP boundary without treating a fixed mood dictionary as the allowed input set.
+
+The full `requestText` is provenance only and is never placed directly into a ListenBrainz or MusicBrainz query. Unknown legacy mood/activity sentences are not converted into outbound tags. Semantic tags must use one to five English catalog words. Explicit genre preferences may also use Korean catalog words and prior refinement state may retain case, but every dynamic outbound tag is normalized and passes the same schema-visible guard against common credential/secret markers, explicit name/address and request-copy markers, personal numeric identifiers, key forms, and opaque IDs; MusicBrainz query phrases remain escaped. This is a bounded common-pattern defense, not a claim that arbitrary prose can be perfectly classified as sensitive. A call containing `requestText` without meaningful `semanticIntent` returns `SEMANTIC_INTENT_REQUIRED` instead of silently guessing. Calls from older clients that omit both fields remain supported and are labeled `canonical_fallback`.
+
+Host-supplied axes and tags are soft interpretations, not user-stated facts or official provider audio features. Results expose `semanticCoverage`, the nearest canonical display anchors, all bounded requested tags, `matchedSemanticTags`/`unmatchedSemanticTags` from the selected tracks' community metadata, and whether catalog matching was strict or broadened.
+
 ## Normal live candidate path
 
 The normal standalone path uses two public discovery routes with condition-aware fallback. It validates preference filters, three-stage feasibility, and requested context metadata instead of accepting whichever route merely returns three raw records first. Equivalent queries use a 10-minute in-memory cache:
@@ -10,7 +18,7 @@ The normal standalone path uses two public discovery routes with condition-aware
 - the official MusicBrainz recording search API with bounded community-tag queries for mood, weather, activity, and vibe-oriented discovery;
 - a ListenBrainz batch recording metadata request for MusicBrainz-backed title, artist, duration, recording/artist MBIDs, ISRC, release, year, and community tags when the ListenBrainz route wins.
 
-For a generic request, a usable ListenBrainz result can finish the request without starting a redundant MusicBrainz tag search. For a weather or vibe request, context-bearing candidates are preferred and the second route is queried when the first cannot provide a strict, feasible result. The two routes are a resilience strategy, not two complete catalogs. The response names the route or routes actually used in `sources` and reports `selectionScope.kind=public_open_catalog`.
+For a generic legacy request, a usable ListenBrainz result can finish the request without starting a redundant MusicBrainz tag search. For a semantic, weather, or vibe request, ListenBrainz starts first; the bounded MusicBrainz hedge opens after 175 ms only when strict metadata has not already arrived. A strict first batch returns immediately and aborts an already-started MusicBrainz loser so it releases the global one-request-per-second queue. If the first batch can only produce a broadened result, MoodTransit waits within a 2.4-second total hedge window for the peer and keeps a strict result when one arrives; after that bound it proceeds with the available batch and reports the limitation. Exact discovery decisions use a hashed ten-minute in-memory cache. The two routes are a resilience strategy, not two complete catalogs. The response names only the route or routes actually used in `sources` and reports `selectionScope.kind=public_open_catalog`.
 
 When the user explicitly names an artist or song, the standalone path also uses the official MusicBrainz search API. Artist names are matched against normalized names and aliases before an MBID-qualified recording search; requested song titles are checked for exact normalized equality. The result reports requested and matched names in `searchResolution` and does not silently claim an unmatched artist or title.
 
@@ -21,7 +29,7 @@ ListenBrainz describes its public listen data and text as available under CC0. I
 
 MusicBrainz is a community-maintained music encyclopedia. Its database is large but incomplete and may contain missing, delayed, duplicated, or community-edited metadata. MoodTransit therefore never claims that the live results include every song, every release, or every item available from YouTube, Melon, or another provider.
 
-When the request includes a weather or vibe context, MoodTransit first tries to select candidates whose returned community metadata matches that context. If fewer than three candidates carry matching metadata, it broadens the pool instead of inventing a match and reports `contextMatchMode=broadened`. A strict match is reported as `contextMatchMode=strict`.
+When the request includes semantic, weather, or vibe context, MoodTransit first tries to select candidates whose returned community metadata matches that context. It reports `contextMatchMode=strict` only when selected metadata collectively covers every requested dynamic semantic tag. Otherwise it reports `broadened` and lists directly matched and unmatched semantic tags instead of inventing full agreement.
 
 MusicBrainz separates its database licensing as follows:
 

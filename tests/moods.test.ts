@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { interpretMood, musicContextTags, normalizeMood, normalizeWeather } from "../src/domain/moods.js";
+import { interpretMood, musicContextTags, normalizeActivity, normalizeMood, normalizeWeather } from "../src/domain/moods.js";
 
 describe("mood input validation", () => {
   it("maps a natural generic mood-change target to a hopeful journey", () => {
@@ -51,5 +51,32 @@ describe("mood input validation", () => {
       "refreshing",
       "upbeat"
     ]));
+  });
+
+  it("does not mistake common negations for the mood, weather, or activity they reject", () => {
+    expect(() => normalizeMood("우울하지 않은 상태")).toThrow("지원하지 않는 기분 표현입니다");
+    expect(() => normalizeMood("너무 신나지는 않게")).toThrow("지원하지 않는 기분 표현입니다");
+    expect(normalizeWeather("오늘은 덥지 않아")).toBe("unknown");
+    expect(normalizeWeather("춥지 않은 날")).toBe("unknown");
+    expect(normalizeActivity("일요일 드라이브")).toBe("commute");
+  });
+
+  it("preserves every non-negated sensory layer in a composite descriptor", () => {
+    const interpreted = interpretMood("짜증나지만 시원하고 몽환적인 느낌", "content");
+    expect(interpreted.kind).toBe("descriptor");
+    expect(interpreted.contextTags).toEqual(expect.arrayContaining([
+      "refreshing",
+      "dreamy",
+      "ambient"
+    ]));
+    expect(interpreted.vector).toBeDefined();
+  });
+
+  it("does not turn an unknown legacy sentence into an external catalog tag", () => {
+    expect(interpretMood("창문을 반쯤 열고 해안도로를 천천히 도는 중", "content")).toEqual({
+      mood: "content",
+      kind: "default",
+      contextTags: []
+    });
   });
 });

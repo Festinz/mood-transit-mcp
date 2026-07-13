@@ -93,10 +93,51 @@ export interface MoodInterpretation {
   mood: CanonicalMood;
   kind: "mood" | "descriptor" | "default";
   contextTags: string[];
+  vector?: MoodVector;
 }
 
 function compact(value: string): string {
   return value.trim().toLocaleLowerCase("en").replace(/[\s_-]+/g, "");
+}
+
+function isNegatedAt(value: string, index: number, length: number): boolean {
+  const before = value.slice(Math.max(0, index - 12), index);
+  const after = value.slice(index + length, index + length + 16);
+  return /(?:안|덜|not|no|without|avoid)$/iu.test(before)
+    || /^(?:하지(?:는)?않|지(?:는)?않|하지말|한건아니|한게아니|은아니|는아니|아니|말고|빼고|제외|싫)/iu.test(after);
+}
+
+function includesUnnegated(value: string, term: string): boolean {
+  let from = 0;
+  while (from <= value.length - term.length) {
+    const index = value.indexOf(term, from);
+    if (index < 0) return false;
+    if (!isNegatedAt(value, index, term.length)) return true;
+    from = index + Math.max(1, term.length);
+  }
+  return false;
+}
+
+function matchesUnnegated(value: string, pattern: RegExp): boolean {
+  const flags = [...new Set(`${pattern.flags}g`.split(""))].join("");
+  const matcher = new RegExp(pattern.source, flags);
+  for (const match of value.matchAll(matcher)) {
+    const index = match.index ?? 0;
+    if (!isNegatedAt(value, index, match[0].length)) return true;
+  }
+  return false;
+}
+
+function nearestMood(vector: MoodVector): CanonicalMood {
+  return (Object.entries(MOOD_VECTORS) as Array<[CanonicalMood, MoodVector]>)
+    .sort(([, left], [, right]) => {
+      const distance = (candidate: MoodVector) => (
+        (candidate.valence - vector.valence) ** 2
+        + (candidate.energy - vector.energy) ** 2
+        + (candidate.acousticness - vector.acousticness) ** 2
+      );
+      return distance(left) - distance(right);
+    })[0]?.[0] ?? "content";
 }
 
 export function normalizeMood(value: string): CanonicalMood {
@@ -105,7 +146,7 @@ export function normalizeMood(value: string): CanonicalMood {
   if (exact) return exact;
 
   const ordered = Object.entries(SYNONYMS).sort(([a], [b]) => b.length - a.length);
-  const contained = ordered.find(([key]) => normalized.includes(key));
+  const contained = ordered.find(([key]) => includesUnnegated(normalized, key));
   if (contained) return contained[1];
   throw new Error(`지원하지 않는 기분 표현입니다: ${value.trim()}`);
 }
@@ -117,27 +158,35 @@ export function normalizeMood(value: string): CanonicalMood {
  */
 export function interpretMood(value: string | undefined, fallback: CanonicalMood): MoodInterpretation {
   if (!value?.trim()) return { mood: fallback, kind: "default", contextTags: [] };
+  const normalized = compact(value);
+  let canonical: CanonicalMood | undefined;
   try {
-    return { mood: normalizeMood(value), kind: "mood", contextTags: [] };
+    canonical = normalizeMood(value);
   } catch {
-    const normalized = compact(value);
-    const rule = DESCRIPTOR_RULES.find(({ pattern }) => pattern.test(normalized));
-    if (rule) return { mood: rule.mood, kind: "descriptor", contextTags: [...rule.tags] };
-
-    const safeTag = value
-      .normalize("NFKC")
-      .trim()
-      .toLocaleLowerCase("en")
-      .replace(/[^\p{L}\p{N}]+/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 64);
+    canonical = undefined;
+  }
+  const descriptorRules = DESCRIPTOR_RULES.filter(({ pattern }) => matchesUnnegated(normalized, pattern));
+  if (descriptorRules.length > 0) {
+    const moods = [...(canonical ? [canonical] : []), ...descriptorRules.map((rule) => rule.mood)];
+    const vector = moods.reduce<MoodVector>((result, mood) => ({
+      valence: result.valence + MOOD_VECTORS[mood].valence / moods.length,
+      energy: result.energy + MOOD_VECTORS[mood].energy / moods.length,
+      acousticness: result.acousticness + MOOD_VECTORS[mood].acousticness / moods.length
+    }), { valence: 0, energy: 0, acousticness: 0 });
     return {
-      mood: fallback,
-      kind: "default",
-      contextTags: safeTag ? [safeTag] : []
+      mood: nearestMood(vector),
+      kind: "descriptor",
+      contextTags: [...new Set(descriptorRules.flatMap((rule) => rule.tags))].slice(0, 12),
+      vector
     };
   }
+  if (canonical) return { mood: canonical, kind: "mood", contextTags: [] };
+
+  return {
+    mood: fallback,
+    kind: "default",
+    contextTags: []
+  };
 }
 
 const WEATHER_MUSIC_TAGS: Record<WeatherTag, readonly string[]> = {
@@ -173,24 +222,24 @@ export function interpolateMood(from: CanonicalMood, to: CanonicalMood, progress
 export function normalizeWeather(value?: string): WeatherTag {
   if (!value) return "unknown";
   const normalized = compact(value);
-  if (/hail|snow|sleet|우박|눈(?:이|은|오는|와|옴|내리|중|$)|눈보라|진눈깨비/.test(normalized)) return "snow";
-  if (/storm|thunder|lightning|typhoon|rain|drizzle|shower|폭풍|태풍|천둥|번개|비(?:가|는|오는|와|옴|내리|중|$)|빗|소나기|장마/.test(normalized)) return "rain";
-  if (/fog|mist|cloud|overcast|안개|흐림|흐린|흐려|구름/.test(normalized)) return "cloudy";
-  if (/wind|breeze|cool|바람|바람부|선선|시원/.test(normalized)) return "wind";
-  if (/hot|heat|humid|muggy|더움|더운|더워|덥|무더|폭염|후덥|습하/.test(normalized)) return "hot";
-  if (/cold|chilly|추움|추운|추워|춥|한파/.test(normalized)) return "cold";
-  if (/clear|sun|sunny|맑음|맑은|맑아|맑고|화창/.test(normalized)) return "clear";
+  if (matchesUnnegated(normalized, /hail|snow|sleet|우박|눈(?:이|은|오는|와|옴|내리|중|$)|눈보라|진눈깨비/u)) return "snow";
+  if (matchesUnnegated(normalized, /storm|thunder|lightning|typhoon|rain|drizzle|shower|폭풍|태풍|천둥|번개|비(?:가|는|오는|와|옴|내리|중|$)|빗|소나기|장마/u)) return "rain";
+  if (matchesUnnegated(normalized, /fog|mist|cloud|overcast|안개|흐림|흐린|흐려|구름/u)) return "cloudy";
+  if (matchesUnnegated(normalized, /wind|breeze|cool|바람|바람부|선선|시원/u)) return "wind";
+  if (matchesUnnegated(normalized, /hot|heat|humid|muggy|더움|더운|더워|덥|무더|폭염|후덥|습하/u)) return "hot";
+  if (matchesUnnegated(normalized, /cold|chilly|추움|추운|추워|춥|한파/u)) return "cold";
+  if (matchesUnnegated(normalized, /clear|sun|sunny|맑음|맑은|맑아|맑고|화창/u)) return "clear";
   return "unknown";
 }
 
 export function normalizeActivity(value?: string): ActivityTag | undefined {
   if (!value) return undefined;
   const normalized = compact(value);
-  if (/sleep|bed|잠|수면/.test(normalized)) return "sleep";
-  if (/study|read|공부|독서/.test(normalized)) return "study";
-  if (/work|office|업무|일/.test(normalized)) return "work";
-  if (/run|gym|exercise|workout|운동|러닝|헬스/.test(normalized)) return "exercise";
-  if (/commute|drive|bus|subway|출근|퇴근|운전|지하철/.test(normalized)) return "commute";
-  if (/walk|stroll|산책/.test(normalized)) return "walk";
+  if (matchesUnnegated(normalized, /sleep|bed|잠|수면/u)) return "sleep";
+  if (matchesUnnegated(normalized, /study|read|공부|독서/u)) return "study";
+  if (matchesUnnegated(normalized, /work|office|업무|작업|일하/u)) return "work";
+  if (matchesUnnegated(normalized, /run|gym|exercise|workout|운동|러닝|헬스/u)) return "exercise";
+  if (matchesUnnegated(normalized, /commute|drive|bus|subway|출근|퇴근|운전|드라이브|지하철/u)) return "commute";
+  if (matchesUnnegated(normalized, /walk|stroll|산책/u)) return "walk";
   return "rest";
 }

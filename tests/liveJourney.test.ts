@@ -64,6 +64,60 @@ describe("live journey brief", () => {
 });
 
 describe("external candidate ranking", () => {
+  it("uses continuous host semantics for an out-of-dictionary request instead of quantizing the path to canonical anchors", () => {
+    const candidates = CANONICAL_MOODS.map((mood, index) => candidate(mood, mood, {
+      artist: `Continuous Artist ${index}`
+    }));
+    const canonical = rankExternalCandidates({
+      currentMood: "sad",
+      targetMood: "joyful",
+      minutes: 10
+    }, candidates);
+    const requestText = "이름 붙이기 어려운 축축한 네온빛 새벽에서 서늘하게 빠져나가고 싶어";
+    const semanticIntent = {
+      current: { label: "축축한 네온빛 새벽", valence: 0.05, energy: 0.1, acousticness: 0.45 },
+      target: { label: "서늘한 해방감", valence: 0.72, energy: 0.55, acousticness: 0.05 },
+      discoveryTags: ["nocturnal", "cool breeze"]
+    };
+
+    const semantic = rankExternalCandidates({
+      currentMood: "sad",
+      targetMood: "joyful",
+      minutes: 10,
+      requestText,
+      semanticIntent
+    }, candidates);
+
+    // The nearest public anchors remain identical, but the continuous path is
+    // different enough to choose hopeful rather than the canonical joyful end.
+    expect([semantic.currentMood, semantic.targetMood]).toEqual(["sad", "joyful"]);
+    expect(canonical.tracks.map((track) => track.id)).toEqual(["sad", "focused", "joyful"]);
+    expect(semantic.tracks.map((track) => track.id)).toEqual(["sad", "focused", "hopeful"]);
+    expect(semantic.context).toMatchObject({
+      requestText,
+      semanticIntent,
+      semanticCoverage: "full",
+      contextMatchMode: "broadened"
+    });
+  });
+
+  it("keeps a candidate's blended inferred vector for path ordering instead of snapping it to its nearest mood", () => {
+    const journey = rankExternalCandidates({
+      currentMood: "sad",
+      targetMood: "joyful",
+      minutes: 10
+    }, [
+      candidate("sad-start", "sad"),
+      candidate("mixed-bridge", "sad", { tags: ["sad", "tired", "lonely"] }),
+      candidate("joyful-end", "joyful")
+    ]);
+
+    // The mixed vector lies just beyond sad on the sad -> joyful line, although
+    // its nearest public anchor is lonely (which lies behind sad on that line).
+    expect(journey.tracks.map((track) => track.id)).toEqual(["sad-start", "mixed-bridge", "joyful-end"]);
+    expect(journey.tracks[1]).toMatchObject({ phase: "bridge", inferredMood: "lonely" });
+  });
+
   it("ranks Melon-like basic metadata by personalization without requiring a fixed catalog", () => {
     const candidates: ExternalMusicCandidate[] = [
       { id: "melon-1", title: "Personal One", artist: "Alpha", provider: "melon", providerUrl: "https://www.melon.com/song/detail.htm?songId=1", personalizationScore: 0.98 },
@@ -124,6 +178,52 @@ describe("external candidate ranking", () => {
     ]);
     expect(broadened.context.contextMatchMode).toBe("broadened");
     expect(broadened.tracks.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("matches semantic catalog tags on token boundaries instead of treating rap as trap", () => {
+    const journey = rankExternalCandidates({
+      currentMood: "content",
+      targetMood: "energetic",
+      minutes: 12,
+      semanticIntent: {
+        discoveryTags: ["rap"]
+      }
+    }, [
+      candidate("trap-1", "content", { tags: ["trap"] }),
+      candidate("trap-2", "joyful", { tags: ["melodic trap"] }),
+      candidate("trap-3", "energetic", { tags: ["trap music"] }),
+      candidate("rap-1", "content", { tags: ["rap"] }),
+      candidate("rap-2", "joyful", { tags: ["alternative rap"] }),
+      candidate("rap-3", "energetic", { tags: ["rap music"] })
+    ]);
+
+    expect(journey.context.contextMatchMode).toBe("strict");
+    expect(journey.context.matchedSemanticTags).toEqual(["rap"]);
+    expect(journey.context.unmatchedSemanticTags).toBeUndefined();
+    expect(journey.tracks.every((track) => track.id.startsWith("rap-"))).toBe(true);
+  });
+
+  it("does not label a semantic request strict when selected metadata matches only one requested quality", () => {
+    const journey = rankExternalCandidates({
+      currentMood: "content",
+      targetMood: "focused",
+      minutes: 12,
+      semanticIntent: {
+        target: { valence: 0.58, energy: 0.5, acousticness: 0.25 },
+        discoveryTags: ["electronic", "clear vocals"]
+      }
+    }, [
+      candidate("electronic-1", "content", { tags: ["content", "electronic"] }),
+      candidate("electronic-2", "focused", { tags: ["focused", "electronic"] }),
+      candidate("electronic-3", "hopeful", { tags: ["hopeful", "electronic"] }),
+      candidate("general-1", "content"),
+      candidate("general-2", "focused"),
+      candidate("general-3", "hopeful")
+    ]);
+
+    expect(journey.context.contextMatchMode).toBe("broadened");
+    expect(journey.context.matchedSemanticTags).toEqual(["electronic"]);
+    expect(journey.context.unmatchedSemanticTags).toEqual(["clear vocals"]);
   });
 
   it("broadens a context pool that has three matches but cannot fill three stages within the budget", () => {

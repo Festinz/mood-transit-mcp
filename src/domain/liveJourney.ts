@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { interpolateMood, MOOD_VECTORS, normalizeMood } from "./moods.js";
 import { CANONICAL_MOODS } from "./types.js";
-import type { ExternalMusicCandidate, LiveJourney, LiveJourneyTrack, TasteProfile } from "./liveTypes.js";
+import type {
+  ExternalMusicCandidate,
+  LiveJourney,
+  LiveJourneyTrack,
+  SemanticCoverage,
+  SemanticIntent,
+  SemanticPoint,
+  TasteProfile
+} from "./liveTypes.js";
 import type { CanonicalMood, MoodVector, Phase } from "./types.js";
 
 const PHASES: readonly Phase[] = ["mirror", "bridge", "arrive"];
@@ -121,6 +129,8 @@ export interface LiveJourneyBrief {
 export interface RankExternalCandidatesOptions extends PlanLiveJourneyBriefOptions {
   excludedCandidateIds?: string[];
   candidateSource?: LiveJourney["candidateSource"];
+  requestText?: string;
+  semanticIntent?: SemanticIntent;
 }
 
 interface InferredMood {
@@ -195,6 +205,50 @@ function vectorDistance(a: MoodVector, b: MoodVector): number {
   );
 }
 
+function semanticVector(point: SemanticPoint | undefined, fallback: MoodVector, field: "current" | "target"): MoodVector {
+  if (!point) return { ...fallback };
+  const values = [point.valence, point.energy, point.acousticness];
+  if (values.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+    throw new Error(`semanticIntent.${field} axes must be finite numbers from 0 to 1`);
+  }
+  return {
+    valence: point.valence,
+    energy: point.energy,
+    acousticness: point.acousticness
+  };
+}
+
+function interpolateVector(from: MoodVector, to: MoodVector, progress: number): MoodVector {
+  const bounded = Math.max(0, Math.min(1, progress));
+  return {
+    valence: from.valence + (to.valence - from.valence) * bounded,
+    energy: from.energy + (to.energy - from.energy) * bounded,
+    acousticness: from.acousticness + (to.acousticness - from.acousticness) * bounded
+  };
+}
+
+function semanticCoverage(intent: SemanticIntent | undefined): SemanticCoverage {
+  if (intent?.current && intent.target) return "full";
+  if (intent?.current || intent?.target || intent?.discoveryTags?.length || intent?.excludeTags?.length) return "partial";
+  return "canonical_fallback";
+}
+
+function cloneSemanticIntent(intent: SemanticIntent): SemanticIntent {
+  return {
+    ...(intent.current ? { current: { ...intent.current } } : {}),
+    ...(intent.target ? { target: { ...intent.target } } : {}),
+    ...(intent.discoveryTags ? { discoveryTags: [...intent.discoveryTags] } : {}),
+    ...(intent.excludeTags ? { excludeTags: [...intent.excludeTags] } : {})
+  };
+}
+
+function requestedContextTags(options: RankExternalCandidatesOptions): string[] {
+  return [...new Set([
+    ...(options.contextTags ?? []),
+    ...(options.semanticIntent?.discoveryTags ?? [])
+  ].map(normalizeText).filter(Boolean))];
+}
+
 function nearestCanonicalMood(vector: MoodVector): CanonicalMood {
   return [...CANONICAL_MOODS].sort((a, b) => {
     const distanceDifference = vectorDistance(vector, MOOD_VECTORS[a]) - vectorDistance(vector, MOOD_VECTORS[b]);
@@ -243,17 +297,14 @@ function inferMood(candidate: ExternalMusicCandidate): InferredMood {
   };
 }
 
-function pathProjection(vector: MoodVector, currentMood: CanonicalMood, targetMood: CanonicalMood): number {
-  const from = MOOD_VECTORS[currentMood];
-  const to = MOOD_VECTORS[targetMood];
-  if (currentMood === targetMood) return -vectorDistance(vector, to);
+function pathProjection(vector: MoodVector, from: MoodVector, to: MoodVector): number {
   const delta = {
     valence: to.valence - from.valence,
     energy: to.energy - from.energy,
     acousticness: to.acousticness - from.acousticness
   };
   const denominator = delta.valence ** 2 + delta.energy ** 2 + delta.acousticness ** 2;
-  if (denominator <= Number.EPSILON) return 0;
+  if (denominator <= Number.EPSILON) return -vectorDistance(vector, to);
   return (
     (vector.valence - from.valence) * delta.valence +
     (vector.energy - from.energy) * delta.energy +
@@ -367,9 +418,13 @@ export function planLiveJourneyBrief(options: PlanLiveJourneyBriefOptions): Live
 }
 
 function matchesTerm(value: string, terms: readonly string[]): boolean {
+  const normalizedValue = normalizeText(value);
+  if (!normalizedValue) return false;
+  const paddedValue = ` ${normalizedValue} `;
   return terms.some((term) => {
     const normalized = normalizeText(term);
-    return normalized.length > 0 && (value === normalized || value.includes(normalized));
+    return normalized.length > 0
+      && (normalizedValue === normalized || paddedValue.includes(` ${normalized} `));
   });
 }
 
@@ -433,12 +488,13 @@ function duplicatePreference(candidate: ExternalMusicCandidate): number {
 function prepareCandidates(
   options: RankExternalCandidatesOptions,
   candidates: readonly ExternalMusicCandidate[],
-  currentMood: CanonicalMood,
-  targetMood: CanonicalMood
+  currentVector: MoodVector,
+  targetVector: MoodVector
 ): PreparedCandidate[] {
   const taste = options.tasteProfile ?? {};
   const avoidArtists = taste.avoidArtists ?? [];
   const avoidGenres = taste.avoidGenres ?? [];
+  const semanticExcludeTags = options.semanticIntent?.excludeTags ?? [];
   const excluded = new Set((options.excludedCandidateIds ?? []).map(normalizeText));
   const filtered = candidates
     .filter((candidate) => candidate.id?.trim() && candidate.title?.trim() && candidate.artist?.trim())
@@ -450,7 +506,8 @@ function prepareCandidates(
     })
     .filter(({ candidate, normalizedTags, normalizedGenres }) => (
       !matchesTerm(normalizeText(candidate.artist), avoidArtists) &&
-      !genresMatch([...normalizedGenres, ...normalizedTags], avoidGenres)
+      !genresMatch([...normalizedGenres, ...normalizedTags], avoidGenres) &&
+      !genresMatch([...normalizedGenres, ...normalizedTags], semanticExcludeTags)
     ))
     .filter(({ candidate }) => taste.artistScope !== "only" || favoriteArtistMatch(candidate, taste))
     .filter(({ candidate, normalizedTags, normalizedGenres }) => {
@@ -473,7 +530,6 @@ function prepareCandidates(
 
   return [...unique.values()].map(({ candidate, normalizedTags, normalizedGenres }): PreparedCandidate => {
     const inferred = inferMood(candidate);
-    const pathVector = MOOD_VECTORS[inferred.canonical];
     return {
       candidate,
       stableKey: stableCandidateKey(candidate),
@@ -485,8 +541,8 @@ function prepareCandidates(
         ? Math.round(candidate.durationSec)
         : DEFAULT_DURATION_SEC,
       inferred,
-      pathProgress: pathProjection(pathVector, currentMood, targetMood),
-      targetDistance: vectorDistance(pathVector, MOOD_VECTORS[targetMood]),
+      pathProgress: pathProjection(inferred.vector, currentVector, targetVector),
+      targetDistance: vectorDistance(inferred.vector, targetVector),
       personalization: personalizationValue(candidate)
     };
   }).sort((a, b) => a.stableKey.localeCompare(b.stableKey));
@@ -509,7 +565,7 @@ function phaseCounts(total: number): Record<Phase, number> {
   return result;
 }
 
-function buildSlots(total: number, currentMood: CanonicalMood, targetMood: CanonicalMood, minutes: number): PlannedSlot[] {
+function buildSlots(total: number, currentVector: MoodVector, targetVector: MoodVector, minutes: number): PlannedSlot[] {
   const counts = phaseCounts(total);
   const allocations = allocatePhaseSeconds(minutes);
   const progressRanges: Record<Phase, readonly [number, number]> = {
@@ -526,7 +582,7 @@ function buildSlots(total: number, currentMood: CanonicalMood, targetMood: Canon
       return {
         phase,
         progress,
-        targetVector: interpolateMood(currentMood, targetMood, progress),
+        targetVector: interpolateVector(currentVector, targetVector, progress),
         idealDurationSec: allocations[phase] / count
       };
     });
@@ -551,7 +607,7 @@ function scoreCandidate(
   const moodDistance = vectorDistance(prepared.inferred.vector, slot.targetVector);
   const durationDifference = Math.abs(prepared.effectiveDurationSec - slot.idealDurationSec) / Math.max(1, slot.idealDurationSec);
   const contextualTerms = [...prepared.normalizedTags, ...prepared.normalizedGenres];
-  const contextTerms = options.contextTags ?? [];
+  const contextTerms = requestedContextTags(options);
   const contextMatch = contextTerms.length > 0
     && contextualTerms.some((term) => matchesTerm(term, contextTerms));
   const activityMatch = options.activity
@@ -677,8 +733,9 @@ function reasonFor(prepared: PreparedCandidate, phase: Phase, options: RankExter
   if (favoriteArtistMatch(prepared.candidate, options.tasteProfile ?? {})) evidence.push("선호 아티스트");
   if (matchesTerm(normalizeText(prepared.candidate.title), options.tasteProfile?.favoriteTracks ?? [])) evidence.push("지정 곡");
   if (genresMatch([...prepared.normalizedGenres, ...prepared.normalizedTags], options.tasteProfile?.favoriteGenres ?? [])) evidence.push("선호 장르");
-  if ((options.contextTags ?? []).length > 0
-    && [...prepared.normalizedGenres, ...prepared.normalizedTags].some((term) => matchesTerm(term, options.contextTags ?? []))) {
+  const contextTags = requestedContextTags(options);
+  if (contextTags.length > 0
+    && [...prepared.normalizedGenres, ...prepared.normalizedTags].some((term) => matchesTerm(term, contextTags))) {
     evidence.push("날씨·분위기 맥락");
   }
   if (!prepared.inferred.hasMoodSignal && prepared.personalization > 0) evidence.push("공급자 개인화(provider personalization)");
@@ -703,6 +760,7 @@ function journeyId(options: RankExternalCandidatesOptions, tracks: readonly Prep
     weather: options.weather,
     desiredVibe: options.desiredVibe,
     contextTags: options.contextTags,
+    semanticIntent: options.semanticIntent,
     activity: options.activity,
     tasteProfile: options.tasteProfile,
     tracks: tracks.map((track) => track.stableKey)
@@ -719,14 +777,18 @@ export function rankExternalCandidates(
     throw new Error(`candidates must contain at most ${MAX_CANDIDATES} tracks`);
   }
 
-  const currentMood = normalizeMood(options.currentMood);
-  const targetMood = normalizeMood(options.targetMood);
+  const fallbackCurrentMood = normalizeMood(options.currentMood);
+  const fallbackTargetMood = normalizeMood(options.targetMood);
+  const currentVector = semanticVector(options.semanticIntent?.current, MOOD_VECTORS[fallbackCurrentMood], "current");
+  const targetVector = semanticVector(options.semanticIntent?.target, MOOD_VECTORS[fallbackTargetMood], "target");
+  const currentMood = nearestCanonicalMood(currentVector);
+  const targetMood = nearestCanonicalMood(targetVector);
   const budgetSec = Math.round(options.minutes * 60);
-  const pool = prepareCandidates(options, candidates, currentMood, targetMood);
+  const pool = prepareCandidates(options, candidates, currentVector, targetVector);
   if (pool.length < 3) {
     throw new Error("At least three usable candidates are required after exclusions and preference filters");
   }
-  const contextTags = options.contextTags ?? [];
+  const contextTags = requestedContextTags(options);
   const strictContextPool = contextTags.length === 0
     ? pool
     : pool.filter((prepared) => (
@@ -743,7 +805,7 @@ export function rankExternalCandidates(
   const selectFromPool = (candidatePool: readonly PreparedCandidate[]) => {
     const desired = desiredTrackCount(candidatePool, budgetSec);
     for (let count = desired; count >= 1; count -= 1) {
-      const slots = buildSlots(count, currentMood, targetMood, options.minutes);
+      const slots = buildSlots(count, currentVector, targetVector, options.minutes);
       const result = selectForSlots(candidatePool, slots, options, budgetSec);
       if (result) return { selected: result, selectedSlots: slots };
     }
@@ -761,11 +823,17 @@ export function rankExternalCandidates(
     throw new Error("The candidate pool cannot fill all three stages within the requested time");
   }
   const preparedTracks = selected.tracks;
+  const semanticTags = options.semanticIntent?.discoveryTags ?? [];
+  const matchedSemanticTags = semanticTags.filter((tag) => preparedTracks.some((prepared) => (
+    [...prepared.normalizedTags, ...prepared.normalizedGenres].some((term) => matchesTerm(term, [tag]))
+  )));
+  const unmatchedSemanticTags = semanticTags.filter((tag) => !matchedSemanticTags.includes(tag));
+  if (contextMatchMode === "strict" && unmatchedSemanticTags.length > 0) contextMatchMode = "broadened";
   const tracks = preparedTracks.map((prepared, index): LiveJourneyTrack => {
     const slot = selectedSlots[index] ?? {
       phase: "arrive",
       progress: 1,
-      targetVector: MOOD_VECTORS[targetMood],
+      targetVector,
       idealDurationSec: prepared.effectiveDurationSec
     };
     return {
@@ -793,7 +861,12 @@ export function rankExternalCandidates(
       ...(options.desiredVibe?.trim() ? { desiredVibe: options.desiredVibe.trim() } : {}),
       ...(options.contextTags?.length ? { contextTags: [...options.contextTags] } : {}),
       contextMatchMode,
+      ...(matchedSemanticTags.length ? { matchedSemanticTags } : {}),
+      ...(unmatchedSemanticTags.length ? { unmatchedSemanticTags } : {}),
       ...(options.activity?.trim() ? { activity: options.activity.trim() } : {}),
+      ...(options.requestText === undefined ? {} : { requestText: options.requestText }),
+      ...(options.semanticIntent ? { semanticIntent: cloneSemanticIntent(options.semanticIntent) } : {}),
+      semanticCoverage: semanticCoverage(options.semanticIntent),
       sourceNote: `Ranked ${selectionPool.length} of ${pool.length} unique tracks supplied by external providers. Missing durations use a ${DEFAULT_DURATION_SEC}-second planning estimate.`
     },
     tracks

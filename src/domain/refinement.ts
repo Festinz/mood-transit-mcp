@@ -1,4 +1,4 @@
-import type { TasteProfile } from "./liveTypes.js";
+import type { SemanticIntent, SemanticPoint, TasteProfile } from "./liveTypes.js";
 
 export type JourneySourceMode = "live_open_catalog" | "provided_candidates";
 
@@ -12,6 +12,8 @@ export interface JourneyRequestState {
   currentMood: string;
   targetMood: string;
   minutes: number;
+  requestText?: string;
+  semanticIntent?: SemanticIntent;
   weather?: string;
   weatherSource?: "provided" | "open-meteo";
   desiredVibe?: string;
@@ -22,7 +24,7 @@ export interface JourneyRequestState {
 }
 
 export interface RefinementState {
-  stateVersion: "1";
+  stateVersion: "1" | "2";
   sourceMode: JourneySourceMode;
   journeyId: string;
   revision: number;
@@ -37,6 +39,10 @@ export interface RefinementChanges {
   energyDirection?: "more_energy" | "less_energy";
   discoveryDirection?: "more_familiar" | "more_discovery";
   targetMood?: string;
+  requestText?: string;
+  targetSemantic?: SemanticPoint;
+  discoveryTags?: string[];
+  excludeTags?: string[];
   minutes?: number;
   languagePreference?: "any" | "korean" | "international" | "instrumental";
   instrumentalOnly?: boolean;

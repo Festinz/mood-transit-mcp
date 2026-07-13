@@ -244,6 +244,17 @@ describe("MCP SDK discovery and representative calls", () => {
           openWorldHint: tool.name !== "arrange_candidate_mood_journey"
         }));
       }
+      const buildTool = list.tools.find((tool) => tool.name === "build_live_mood_journey");
+      const buildProperties = (buildTool?.inputSchema as { properties?: Record<string, unknown> }).properties;
+      expect(buildProperties).toEqual(expect.objectContaining({
+        requestText: expect.any(Object),
+        semanticIntent: expect.any(Object)
+      }));
+      expect(buildTool?.description).toContain("ALWAYS copy");
+      const buildSchemaText = JSON.stringify(buildTool?.inputSchema);
+      expect(buildSchemaText).toContain("[hH][uU][nN][tT][eE][rR]");
+      expect(buildSchemaText).toContain("{0,4}");
+      expect(buildSchemaText).toContain("[aA][kK][iI][aA]");
 
       const live = await client.callTool({ name: "build_live_mood_journey", arguments: { currentMood: "울적", targetMood: "hopeful", weather: "rain", activity: "commute", minutes: 20, preferences: { preferredGenres: ["k-pop"], discovery: "adventurous" } } });
       expect(live.isError).not.toBe(true);
@@ -263,6 +274,24 @@ describe("MCP SDK discovery and representative calls", () => {
         contextMatchMode: "broadened"
       }));
 
+      const screenshotRequest = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "우울",
+          targetMood: "시원한",
+          weather: "더운 날씨",
+          minutes: 30
+        }
+      });
+      expect(screenshotRequest.isError).not.toBe(true);
+      expect(screenshotRequest.structuredContent).toHaveProperty("currentMood", "sad");
+      expect(screenshotRequest.structuredContent).toHaveProperty("targetMood", "energetic");
+      expect(screenshotRequest.structuredContent).toHaveProperty("context", expect.objectContaining({
+        weather: "더운 날씨",
+        desiredVibe: "시원한",
+        contextTags: expect.arrayContaining(["summer", "refreshing"])
+      }));
+
       const vibeOnlyLive = await client.callTool({
         name: "build_live_mood_journey",
         arguments: { weather: "오늘은 폭염", desiredVibe: "청량하고 상쾌한", minutes: 30 }
@@ -271,6 +300,119 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(vibeOnlyLive.structuredContent).toHaveProperty("currentMood", "content");
       expect(vibeOnlyLive.structuredContent).toHaveProperty("targetMood", "energetic");
       expect(vibeOnlyLive.structuredContent).toHaveProperty("context.desiredVibe", "청량하고 상쾌한");
+
+      const semanticCallStart = listenBrainzFetch.mock.calls.length;
+      const freeRequestText = "이름 붙이기 어려운 축축한 네온빛 새벽에서 머릿속 매듭이 풀리듯 빠져나가고 싶어";
+      const semanticLive = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: freeRequestText,
+          currentMood: freeRequestText,
+          desiredVibe: freeRequestText,
+          semanticIntent: {
+            current: { label: "축축한 네온빛 새벽", valence: 0.12, energy: 0.25, acousticness: 0.78 },
+            target: { label: "숨통이 트이는 맑은 상태", valence: 0.78, energy: 0.58, acousticness: 0.48 },
+            discoveryTags: ["ethereal", "night drive", "dream pop"],
+            excludeTags: ["metal"]
+          },
+          activity: "창문을 반쯤 열고 해안도로를 천천히 도는 중",
+          minutes: 30
+        }
+      });
+      expect(semanticLive.isError).not.toBe(true);
+      expect(semanticLive.structuredContent).toHaveProperty("currentMood", "sad");
+      expect(semanticLive.structuredContent).toHaveProperty("targetMood", "hopeful");
+      expect(semanticLive.structuredContent).toHaveProperty("interpretation", expect.objectContaining({
+        semanticSource: "host_supplied",
+        semanticCoverage: "full",
+        discoveryTags: ["ethereal", "night drive", "dream pop"],
+        excludeTags: ["metal"]
+      }));
+      expect(semanticLive.structuredContent).toHaveProperty("refinementState", expect.objectContaining({
+        stateVersion: "2",
+        request: expect.objectContaining({
+          requestText: freeRequestText,
+          semanticIntent: expect.objectContaining({
+            current: expect.objectContaining({ valence: 0.12, energy: 0.25, acousticness: 0.78 }),
+            target: expect.objectContaining({ valence: 0.78, energy: 0.58, acousticness: 0.48 }),
+            discoveryTags: ["ethereal", "night drive", "dream pop"],
+            excludeTags: ["metal"]
+          })
+        })
+      }));
+      const semanticRadioCalls = listenBrainzFetch.mock.calls.slice(semanticCallStart)
+        .map(([input]) => new URL(input instanceof Request ? input.url : input.toString()))
+        .filter((url) => url.pathname === "/1/lb-radio/tags");
+      expect(semanticRadioCalls.length).toBeGreaterThan(0);
+      const semanticQueryTags = semanticRadioCalls.flatMap((url) => url.searchParams.getAll("tag"));
+      expect(semanticQueryTags).toEqual(expect.arrayContaining(["ethereal", "night drive", "dream pop", "sad", "hopeful"]));
+      expect(semanticQueryTags).not.toContain(freeRequestText.toLocaleLowerCase("en"));
+      expect(semanticQueryTags).not.toContain("창문을 반쯤 열고 해안도로를 천천히 도는 중");
+
+      const legacyRawCallStart = listenBrainzFetch.mock.calls.length;
+      const legacyRaw = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "angry",
+          targetMood: "romantic",
+          activity: "password hunter2",
+          minutes: 20
+        }
+      });
+      expect(legacyRaw.isError).not.toBe(true);
+      const legacyRawQueries = listenBrainzFetch.mock.calls.slice(legacyRawCallStart)
+        .map(([input]) => new URL(input instanceof Request ? input.url : input.toString()))
+        .filter((url) => url.pathname === "/1/lb-radio/tags");
+      expect(legacyRawQueries.length).toBeGreaterThan(0);
+      expect(legacyRawQueries.flatMap((url) => url.searchParams.getAll("tag"))).not.toContain("password hunter2");
+
+      const semanticRefined = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: semanticLive.structuredContent?.refinementState,
+          changes: {
+            requestText: "이제는 포근하되 처지지는 않게 바꿔줘",
+            targetSemantic: { label: "포근하지만 또렷한 상태", valence: 0.68, energy: 0.38, acousticness: 0.82 },
+            discoveryTags: ["cozy", "warm acoustic"],
+            excludeTags: []
+          }
+        }
+      });
+      expect(semanticRefined.isError).not.toBe(true);
+      expect(semanticRefined.structuredContent).toHaveProperty("refinementState", expect.objectContaining({
+        stateVersion: "2",
+        request: expect.objectContaining({
+          requestText: "이제는 포근하되 처지지는 않게 바꿔줘",
+          semanticIntent: expect.objectContaining({
+            current: expect.objectContaining({ label: "축축한 네온빛 새벽" }),
+            target: expect.objectContaining({ label: "포근하지만 또렷한 상태" }),
+            discoveryTags: ["cozy", "warm acoustic"],
+            excludeTags: []
+          })
+        })
+      }));
+
+      const semanticDirectionalRefined = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: semanticLive.structuredContent?.refinementState,
+          changes: {
+            requestText: "조금 더 밝고 에너지 있게 바꿔줘",
+            moodDirection: "brighter",
+            energyDirection: "more_energy"
+          }
+        }
+      });
+      expect(semanticDirectionalRefined.isError).not.toBe(true);
+      expect(semanticDirectionalRefined.structuredContent).toHaveProperty(
+        "refinementState.request.semanticIntent.target",
+        { valence: 1, energy: 0.83, acousticness: 0.48 }
+      );
+      expect(semanticDirectionalRefined.structuredContent).toHaveProperty("interpretation.targetAxes", {
+        valence: 1,
+        energy: 0.83,
+        acousticness: 0.48
+      });
 
       const vibeRefined = await client.callTool({
         name: "refine_mood_journey",
@@ -355,15 +497,32 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(ambiguousTrack.structuredContent).toHaveProperty("error.code", "TRACK_AMBIGUOUS");
 
       const liveState = live.structuredContent?.refinementState as Record<string, unknown>;
+      const legacyRequest = liveState.request as Record<string, unknown>;
+      const legacyTaste = (legacyRequest.tasteProfile ?? {}) as Record<string, unknown>;
       const liveRefined = await client.callTool({
         name: "refine_mood_journey",
         arguments: {
-          refinementState: { ...liveState, candidateSource: {} },
+          refinementState: {
+            ...liveState,
+            stateVersion: "1",
+            candidateSource: {},
+            request: {
+              ...legacyRequest,
+              contextTags: ["Summer Vibes"],
+              tasteProfile: {
+                ...legacyTaste,
+                favoriteGenres: ["K-Pop"],
+                avoidGenres: ["R&B"]
+              }
+            }
+          },
           changes: { moodDirection: "brighter" }
         }
       });
       expect(liveRefined.isError).not.toBe(true);
       expect(liveRefined.structuredContent).toHaveProperty("revision", 1);
+      expect(liveRefined.structuredContent).toHaveProperty("refinementState.stateVersion", "2");
+      expect(liveRefined.structuredContent).toHaveProperty("refinementState.request.tasteProfile.favoriteGenres", ["K-Pop"]);
 
       const weatherAwareCallStart = listenBrainzFetch.mock.calls.length;
       const cityLive = await client.callTool({ name: "build_live_mood_journey", arguments: { currentMood: "울적", targetMood: "hopeful", city: "Seoul", activity: "commute", minutes: 20, preferences: { preferredGenres: ["k-pop"], discovery: "adventurous" } } });
@@ -422,6 +581,183 @@ describe("MCP SDK discovery and representative calls", () => {
       const result = await client.callTool({ name: "build_live_mood_journey", arguments: { currentMood: "sad", targetMood: "calm", minutes: 2 } });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result).length).toBeLessThan(5_000);
+
+      const invalidAxes = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "범위를 벗어난 의미 좌표",
+          semanticIntent: {
+            target: { valence: 1.1, energy: 0.5, acousticness: 0.5 },
+            discoveryTags: ["calm"]
+          },
+          minutes: 20
+        }
+      });
+      expect(invalidAxes.isError).toBe(true);
+
+      const missingSemanticIntent = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { requestText: "분노와 허탈함이 섞였는데 차갑고 단단하게 집중하고 싶어", minutes: 20 }
+      });
+      expect(missingSemanticIntent.isError).toBe(true);
+      expect(missingSemanticIntent.structuredContent).toHaveProperty("error.code", "SEMANTIC_INTENT_REQUIRED");
+
+      const emptySemanticIntent = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { requestText: "빈 의미 객체로는 추측하지 마", semanticIntent: {}, minutes: 20 }
+      });
+      expect(emptySemanticIntent.isError).toBe(true);
+      expect(emptySemanticIntent.structuredContent).toHaveProperty("error.code", "SEMANTIC_INTENT_REQUIRED");
+
+      const sensitiveCatalogTag = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "비밀 문자열을 음악 태그로 보내면 안 돼",
+          semanticIntent: { discoveryTags: ["password hunter2", "calm"] },
+          minutes: 20
+        }
+      });
+      expect(sensitiveCatalogTag.isError).toBe(true);
+
+      const personalNumericTag = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "전화번호 같은 값도 음악 태그로 보내면 안 돼",
+          semanticIntent: { discoveryTags: ["phone 010 1234 5678", "calm"] },
+          minutes: 20
+        }
+      });
+      expect(personalNumericTag.isError).toBe(true);
+
+      for (const personalTextTag of [
+        "my name is john smith",
+        "name john smith",
+        "full name john smith",
+        "account number 1234 5678",
+        "phone 1234 5678",
+        "address 12 main street",
+        "이름 홍길동",
+        "내 이름은 홍길동",
+        "성명 홍길동"
+      ]) {
+        const personalText = await client.callTool({
+          name: "build_live_mood_journey",
+          arguments: {
+            requestText: "개인정보 문구는 검색 태그로 보내면 안 돼",
+            semanticIntent: { discoveryTags: [personalTextTag, "calm"] },
+            minutes: 20
+          }
+        });
+        expect(personalText.isError, personalTextTag).toBe(true);
+      }
+
+      const opaqueCredentialTag = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "자격 증명처럼 보이는 값을 음악 태그로 보내면 안 돼",
+          semanticIntent: { discoveryTags: ["akiaiosfodnn7example", "calm"] },
+          minutes: 20
+        }
+      });
+      expect(opaqueCredentialTag.isError).toBe(true);
+
+      const requestSentenceTag = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "전체 요청 문장을 검색 태그로 복사하면 안 돼",
+          semanticIntent: { discoveryTags: ["please play my breakup songs", "calm"] },
+          minutes: 20
+        }
+      });
+      expect(requestSentenceTag.isError).toBe(true);
+
+      const legitimateCatalogPhrases = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "뮤지컬 느낌의 쇼튠을 듣고 싶어",
+          semanticIntent: { discoveryTags: ["show tunes", "rock & roll", "drum 'n' bass"] },
+          minutes: 20,
+          preferences: { preferredGenres: ["K-Pop", "R&B", "rhythm & blues"] }
+        }
+      });
+      expect(legitimateCatalogPhrases.isError).not.toBe(true);
+
+      const sensitivePreferredGenre = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "sad",
+          targetMood: "hopeful",
+          minutes: 20,
+          preferences: { preferredGenres: ["password hunter2"] }
+        }
+      });
+      expect(sensitivePreferredGenre.isError).toBe(true);
+
+      const tooManyTags = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "검색 태그가 너무 많은 요청",
+          semanticIntent: { discoveryTags: Array.from({ length: 9 }, (_, index) => `tag-${index}`) },
+          minutes: 20
+        }
+      });
+      expect(tooManyTags.isError).toBe(true);
+
+      const emptyDiscoveryTags = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "빈 검색 태그 배열",
+          semanticIntent: { discoveryTags: [] },
+          minutes: 20
+        }
+      });
+      expect(emptyDiscoveryTags.isError).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("filters semantic exclusion tags from an upstream candidate batch", async () => {
+    const client = new Client({ name: "semantic-exclusion-test", version: "1.0.0" });
+    await client.connect(new StreamableHTTPClientTransport(endpoint));
+    try {
+      const result = await client.callTool({
+        name: "arrange_candidate_mood_journey",
+        arguments: {
+          requestText: "거칠고 시끄러운 메탈은 빼고 차분하지만 또렷한 곡으로 골라줘",
+          semanticIntent: {
+            current: { label: "지친 상태", valence: 0.3, energy: 0.3, acousticness: 0.65 },
+            target: { label: "차분하지만 또렷한 상태", valence: 0.62, energy: 0.38, acousticness: 0.72 },
+            discoveryTags: ["calm", "focused"],
+            excludeTags: ["metal"]
+          },
+          minutes: 20,
+          candidateSource: { providerName: "Authorized test provider" },
+          candidates: [
+            ...Array.from({ length: 3 }, (_, index) => ({
+              providerTrackId: `metal-${index}`,
+              title: `Excluded Metal ${index}`,
+              artist: `Loud Artist ${index}`,
+              durationSec: 180,
+              moodTags: ["metal", "energetic"]
+            })),
+            ...Array.from({ length: 5 }, (_, index) => ({
+              providerTrackId: `calm-${index}`,
+              title: `Allowed Calm ${index}`,
+              artist: `Calm Artist ${index}`,
+              durationSec: 180,
+              moodTags: ["calm", "focused"]
+            }))
+          ]
+        }
+      });
+      expect(result.isError).not.toBe(true);
+      const titles = (result.structuredContent?.stages as Array<{ tracks: Array<{ title: string }> }>)
+        .flatMap((stage) => stage.tracks.map((track) => track.title));
+      expect(titles.length).toBeGreaterThanOrEqual(3);
+      expect(titles.every((title) => title.startsWith("Allowed Calm"))).toBe(true);
+      expect(result.structuredContent).toHaveProperty("refinementState.request.tasteProfile.avoidGenres", ["metal"]);
+      expect(result.structuredContent).toHaveProperty("refinementState.request.semanticIntent.excludeTags", ["metal"]);
     } finally {
       await client.close();
     }
@@ -511,6 +847,39 @@ describe("MCP SDK discovery and representative calls", () => {
     }
   });
 
+  it("keeps exact discovery decisions cached across stateless MCP POST requests", async () => {
+    const musicBrainzService = new StubMusicBrainzService();
+    const searchCandidates = vi.spyOn(musicBrainzService, "searchCandidates");
+    const cacheApp = createApp({
+      listenBrainzService: new ListenBrainzService({
+        fetchImpl: vi.fn<typeof fetch>().mockRejectedValue(new Error("ListenBrainz must not be called"))
+      }),
+      musicBrainzService
+    });
+    const cacheServer = await new Promise<HttpServer>((resolve) => {
+      const candidate = cacheApp.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const address = cacheServer.address() as AddressInfo;
+    const client = new Client({ name: "app-cache-lifetime-test", version: "1.0.0" });
+    const arguments_ = {
+      currentMood: "tired",
+      targetMood: "refreshed",
+      minutes: 20,
+      preferences: { preferredArtists: ["TWICE"], artistScope: "only" }
+    };
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
+      const first = await client.callTool({ name: "build_live_mood_journey", arguments: arguments_ });
+      const second = await client.callTool({ name: "build_live_mood_journey", arguments: arguments_ });
+      expect(first.isError).not.toBe(true);
+      expect(second.isError).not.toBe(true);
+      expect(searchCandidates).toHaveBeenCalledTimes(1);
+    } finally {
+      await client.close().catch(() => undefined);
+      await new Promise<void>((resolve, reject) => cacheServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("does not call MusicBrainz when ListenBrainz already supplies a rankable general pool", async () => {
     let releaseGeneral!: () => void;
     const generalGate = new Promise<void>((resolve) => { releaseGeneral = resolve; });
@@ -567,7 +936,48 @@ describe("MCP SDK discovery and representative calls", () => {
     }
   });
 
-  it("merges MusicBrainz tags when the ListenBrainz pool cannot satisfy strict context", async () => {
+  it("does not queue the delayed MusicBrainz hedge when fast ListenBrainz metadata is already semantically strict", async () => {
+    class CountingMusicBrainzService extends StubMusicBrainzService {
+      tagSearchCalls = 0;
+
+      override async searchCandidates(input: MusicBrainzCandidateQuery): Promise<MusicBrainzCandidateResult> {
+        if (input.tags?.length) this.tagSearchCalls += 1;
+        return super.searchCandidates(input);
+      }
+    }
+
+    const musicBrainzService = new CountingMusicBrainzService();
+    const strictListenBrainzApp = createApp({
+      listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch }),
+      musicBrainzService
+    });
+    const strictListenBrainzServer = await new Promise<HttpServer>((resolve) => {
+      const candidate = strictListenBrainzApp.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const address = strictListenBrainzServer.address() as AddressInfo;
+    const client = new Client({ name: "strict-listenbrainz-test", version: "1.0.0" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
+      const result = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "가라앉은 상태에서 자연스럽게 희망적인 쪽으로 이어지는 노래",
+          semanticIntent: { discoveryTags: ["sad", "content", "hopeful"] },
+          minutes: 20
+        }
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toHaveProperty("context.contextMatchMode", "strict");
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      expect(musicBrainzService.tagSearchCalls).toBe(0);
+    } finally {
+      await client.close().catch(() => undefined);
+      await new Promise<void>((resolve, reject) => strictListenBrainzServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("hedges MusicBrainz tags when a context request needs a feasible public batch", async () => {
     const musicBrainzService = new TagMusicBrainzService();
     const contextFallbackApp = createApp({
       listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch }),
@@ -586,18 +996,61 @@ describe("MCP SDK discovery and representative calls", () => {
       });
       expect(result.isError).not.toBe(true);
       expect(musicBrainzService.tagQueries).toHaveLength(1);
-      expect(result.structuredContent).toHaveProperty("selectionScope", expect.objectContaining({
-        kind: "public_open_catalog",
-        candidateCount: 6
-      }));
+      expect(result.structuredContent).toHaveProperty("selectionScope.kind", "public_open_catalog");
+      expect((result.structuredContent?.selectionScope as { candidateCount: number }).candidateCount).toBeGreaterThanOrEqual(3);
       expect(result.structuredContent).toHaveProperty("context.contextMatchMode", "strict");
       expect(result.structuredContent).toHaveProperty("sources", expect.arrayContaining([
-        expect.objectContaining({ name: "ListenBrainz" }),
         expect.objectContaining({ name: "MusicBrainz" })
       ]));
     } finally {
       await client.close().catch(() => undefined);
       await new Promise<void>((resolve, reject) => contextServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("waits within the hedge window for a strict semantic batch instead of keeping a faster unrelated batch", async () => {
+    class DelayedStrictMusicBrainzService extends TagMusicBrainzService {
+      override async searchCandidates(input: MusicBrainzCandidateQuery): Promise<MusicBrainzCandidateResult> {
+        if (input.tags?.length) await new Promise<void>((resolve) => setTimeout(resolve, 80));
+        return super.searchCandidates(input);
+      }
+    }
+
+    const musicBrainzService = new DelayedStrictMusicBrainzService();
+    const strictHedgeApp = createApp({
+      listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch }),
+      musicBrainzService
+    });
+    const strictHedgeServer = await new Promise<HttpServer>((resolve) => {
+      const candidate = strictHedgeApp.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const address = strictHedgeServer.address() as AddressInfo;
+    const client = new Client({ name: "strict-semantic-hedge-test", version: "1.0.0" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
+      const result = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          requestText: "답답한 더위를 씻어낼 상쾌하고 신나는 노래를 틀어줘",
+          semanticIntent: {
+            current: { valence: 0.3, energy: 0.35, acousticness: 0.35 },
+            target: { valence: 0.8, energy: 0.8, acousticness: 0.2 },
+            discoveryTags: ["refreshing", "upbeat"]
+          },
+          minutes: 20
+        }
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toHaveProperty("context.contextMatchMode", "strict");
+      expect(result.structuredContent).toHaveProperty("interpretation.matchedSemanticTags", ["refreshing", "upbeat"]);
+      expect(result.structuredContent).toHaveProperty("interpretation.unmatchedSemanticTags", []);
+      expect(result.structuredContent).toHaveProperty("sources", expect.arrayContaining([
+        expect.objectContaining({ name: "MusicBrainz" })
+      ]));
+    } finally {
+      await client.close().catch(() => undefined);
+      await new Promise<void>((resolve, reject) => strictHedgeServer.close((error) => error ? reject(error) : resolve()));
     }
   });
 

@@ -30,6 +30,16 @@ interface Stats {
   maxMs: number | null;
 }
 
+interface SemanticAudit {
+  passed: boolean;
+  semanticSource?: string;
+  semanticCoverage?: string;
+  contextMatchMode?: string;
+  matchedSemanticTags: string[];
+  unmatchedSemanticTags: string[];
+  reasons: string[];
+}
+
 const endpoint = new URL(process.env.MCP_URL ?? "http://127.0.0.1:8000/mcp");
 if (!(["http:", "https:"] as const).includes(endpoint.protocol as "http:" | "https:")) throw new Error("MCP_URL must use HTTP(S)");
 
@@ -73,6 +83,37 @@ function errorText(value: unknown): string {
   return serialized.length > 500 ? `${serialized.slice(0, 500)}...` : serialized;
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function auditSemanticResult(result: ResultLike | undefined, requestedTags: readonly string[]): SemanticAudit {
+  const raw = result?.structuredContent?.interpretation;
+  const interpretation = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
+  const semanticSource = typeof interpretation.semanticSource === "string" ? interpretation.semanticSource : undefined;
+  const semanticCoverage = typeof interpretation.semanticCoverage === "string" ? interpretation.semanticCoverage : undefined;
+  const contextMatchMode = typeof interpretation.contextMatchMode === "string" ? interpretation.contextMatchMode : undefined;
+  const matchedSemanticTags = stringArray(interpretation.matchedSemanticTags);
+  const unmatchedSemanticTags = stringArray(interpretation.unmatchedSemanticTags);
+  const requested = [...new Set(requestedTags)].sort();
+  const reported = [...new Set([...matchedSemanticTags, ...unmatchedSemanticTags])].sort();
+  const reasons: string[] = [];
+  if (semanticSource !== "host_supplied") reasons.push("semanticSource was not host_supplied");
+  if (semanticCoverage !== "full") reasons.push("semanticCoverage was not full");
+  if (contextMatchMode !== "strict" && contextMatchMode !== "broadened") reasons.push("contextMatchMode was missing");
+  if (JSON.stringify(requested) !== JSON.stringify(reported)) reasons.push("matched/unmatched tags did not partition the requested tags");
+  if (matchedSemanticTags.length === 0) reasons.push("no requested semantic tag matched selected public metadata");
+  return {
+    passed: reasons.length === 0,
+    ...(semanticSource ? { semanticSource } : {}),
+    ...(semanticCoverage ? { semanticCoverage } : {}),
+    ...(contextMatchMode ? { contextMatchMode } : {}),
+    matchedSemanticTags,
+    unmatchedSemanticTags,
+    reasons
+  };
+}
+
 async function measure(client: Client, name: ToolName, args: Record<string, unknown>): Promise<{ sample: Sample; result?: ResultLike }> {
   const started = performance.now();
   try {
@@ -93,13 +134,18 @@ const iterations = bounded(process.env.ENDPOINT_BENCHMARK_ITERATIONS, 20, 1, 200
 const liveWarmIterations = bounded(process.env.ENDPOINT_BENCHMARK_LIVE_WARM_CALLS, 50, 1, 100);
 const concurrency = bounded(process.env.ENDPOINT_BENCHMARK_CONCURRENCY, 4, 2, 10);
 const requireLiveCatalog = /^(1|true|yes)$/i.test(process.env.REQUIRE_LIVE_CATALOG ?? "");
-const thresholds = { averageMs: 100, p99Ms: 3_000 };
+const thresholds = { warmAverageMs: 100, p99Ms: 3_000 };
 
 const liveArgs = {
-  currentMood: "sad",
-  targetMood: "hopeful",
+  requestText: "비 오는 퇴근길, 머릿속은 복잡하지만 너무 처지지 않게 차분히 정리되는 노래를 틀어줘",
+  semanticIntent: {
+    current: { valence: 0.28, energy: 0.48, acousticness: 0.58, label: "복잡하고 지친 퇴근길" },
+    target: { valence: 0.62, energy: 0.45, acousticness: 0.66, label: "차분하고 또렷한 상태" },
+    discoveryTags: ["rainy day", "focus", "indie pop", "calm"],
+    excludeTags: ["metal", "sleep"]
+  },
   minutes: 20,
-  city: "Seoul",
+  weather: "비 오는 퇴근길",
   activity: "commute",
   preferences: { preferredGenres: ["k-pop"], discovery: "adventurous" }
 };
@@ -128,12 +174,18 @@ async function main(): Promise<void> {
     TOOL_NAMES.map((name) => [name, { cold: [], warm: [], concurrent: [] }])
   ) as unknown as Record<ToolName, Record<Phase, Sample[]>>;
 
-  const client = new Client({ name: "mood-transit-endpoint-benchmark", version: "2.2.0" });
+  const client = new Client({ name: "mood-transit-endpoint-benchmark", version: "2.3.0" });
   const connectStarted = performance.now();
   await client.connect(new StreamableHTTPClientTransport(endpoint));
   const connectMs = performance.now() - connectStarted;
 
   let liveColdKind = "missing";
+  let liveSemanticAudit: SemanticAudit = {
+    passed: false,
+    matchedSemanticTags: [],
+    unmatchedSemanticTags: [],
+    reasons: ["cold semantic request was not completed"]
+  };
   try {
     const listed = await client.listTools();
     const discovered = listed.tools.map((tool) => tool.name).sort();
@@ -143,6 +195,7 @@ async function main(): Promise<void> {
     const liveCold = await measure(client, "build_live_mood_journey", liveArgs);
     samples.build_live_mood_journey.cold.push(liveCold.sample);
     liveColdKind = selectionKind(liveCold.result) ?? "missing";
+    liveSemanticAudit = auditSemanticResult(liveCold.result, liveArgs.semanticIntent.discoveryTags);
 
     const arrangeCold = await measure(client, "arrange_candidate_mood_journey", arrangeArgs);
     samples.arrange_candidate_mood_journey.cold.push(arrangeCold.sample);
@@ -173,12 +226,14 @@ async function main(): Promise<void> {
     const tools = Object.fromEntries(TOOL_NAMES.map((name) => {
       const all = [...samples[name].cold, ...samples[name].warm, ...samples[name].concurrent];
       const overall = stats(all);
+      const warm = stats(samples[name].warm);
       const passed = overall.errors === 0 && overall.successes > 0
-        && (overall.averageMs ?? Infinity) <= thresholds.averageMs
+        && warm.errors === 0 && warm.successes > 0
+        && (warm.averageMs ?? Infinity) <= thresholds.warmAverageMs
         && (overall.p99Ms ?? Infinity) <= thresholds.p99Ms;
       return [name, {
         cold: stats(samples[name].cold),
-        warm: stats(samples[name].warm),
+        warm,
         concurrent: stats(samples[name].concurrent),
         overall,
         passed,
@@ -187,7 +242,9 @@ async function main(): Promise<void> {
     })) as unknown as Record<ToolName, { passed: boolean }>;
 
     const liveCatalogPassed = liveColdKind === "public_open_catalog";
-    const passed = TOOL_NAMES.every((name) => tools[name].passed) && (!requireLiveCatalog || liveCatalogPassed);
+    const passed = TOOL_NAMES.every((name) => tools[name].passed)
+      && liveSemanticAudit.passed
+      && (!requireLiveCatalog || liveCatalogPassed);
     process.stdout.write(`${JSON.stringify({
       endpoint: endpoint.toString(),
       startedAt,
@@ -195,7 +252,7 @@ async function main(): Promise<void> {
       connectMs: round(connectMs),
       config: { iterations, liveWarmIterations, concurrency, requireLiveCatalog },
       thresholds,
-      liveCatalog: { coldSelectionKind: liveColdKind, passed: liveCatalogPassed },
+      liveCatalog: { coldSelectionKind: liveColdKind, passed: liveCatalogPassed, semanticAudit: liveSemanticAudit },
       tools,
       passed
     }, null, 2)}\n`);

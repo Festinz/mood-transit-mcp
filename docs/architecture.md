@@ -1,6 +1,6 @@
 # Architecture
 
-MoodTransit(기분환승) v2.2 is a stateless MCP server that turns mood, weather, and sensory-vibe requests into a three-stage music journey: **Mirror → Bridge → Arrive**. Explicit moods are optional at the MCP boundary; weather-only requests default to a neutral current state, while descriptors such as `더운`, `시원한`, `청량한`, `cozy`, and `dreamy` are preserved as bounded discovery context. Its normal standalone path uses request-matched public ListenBrainz/MusicBrainz data, including condition-aware tag discovery fallback, bounded artist-alias search, and exact-title search, with a 10-minute cache for equivalent queries. A route is accepted only after preference filters, three-stage feasibility, and requested context metadata are checked. The bundled 67-track catalog is used only when both general live paths are unavailable, yield fewer than three usable candidates, or cannot satisfy the requested filters. An explicit artist-only request returns an actionable search error instead of silently substituting unrelated fallback tracks.
+MoodTransit(기분환승) v2.3 is a stateless MCP server that turns unrestricted natural-language mood, weather, activity, metaphor, and sensory-vibe requests into a three-stage music journey: **Mirror → Bridge → Arrive**. The PlayMCP host preserves the complete utterance as `requestText` and supplies a bounded `semanticIntent`: continuous 0..1 current/target valence, energy, and acousticness axes plus concise English discovery and exclusion tags inferred from the whole sentence. The 12 canonical moods remain display and backward-compatibility anchors, not an input vocabulary; ranking interpolates the continuous semantic vectors directly. Its standalone path then uses request-matched public ListenBrainz/MusicBrainz data with condition-aware fallback, bounded artist-alias search, exact-title search, and a 10-minute cache. The bundled 67-track catalog is used only when public paths fail or remain too small, while explicit artist-only failures stay actionable.
 
 ```text
 PlayMCP client
@@ -8,6 +8,8 @@ PlayMCP client
     └── POST /mcp (stateless Streamable HTTP, direct JSON response)
           │
           ├── build_live_mood_journey
+          │     ├── verbatim requestText + bounded host semanticIntent
+          │     ├── continuous vector path; canonical moods are display anchors
           │     ├── optional Open-Meteo current weather lookup
           │     ├── condition-aware ListenBrainz/MusicBrainz tag fallback
           │     ├── MusicBrainz artist/alias and exact-title search
@@ -36,18 +38,19 @@ PlayMCP client
 
 ### `build_live_mood_journey`
 
-This is the normal standalone entry point. It uses only the user's explicit request: optional current and target mood, desired sensory vibe, time, optional activity/weather/city, stated artist, song-title or genre preferences, artist-only scope, exclusions, discovery preference, language preference, and an optional MusicBrainz artist MBID.
+This is the normal standalone entry point. It uses only the current request: the verbatim `requestText`, host-interpreted `semanticIntent`, time, optional activity/weather/city, stated artist, song-title or genre preferences, artist-only scope, exclusions, discovery preference, language preference, and an optional MusicBrainz artist MBID.
 
 The live pipeline is:
 
-1. Separate mood, weather, and sensory-vibe wording. Normalize known Korean or English mood text into one of 12 canonical moods, map recognized sensory descriptors to bounded music tags, and use a neutral mood default when no emotion was stated.
-2. Convert the current and target moods into internal valence, energy, and acousticness vectors.
-3. Build bounded discovery tags from the mood path, normalized weather, desired vibe, and explicit preferences.
-4. Query `GET /1/lb-radio/tags` and MusicBrainz `GET /ws/2/recording/?query=tag:...` through condition-aware fallback: generic requests can finish on a feasible ListenBrainz batch, while context requests prefer a strict context-bearing batch and query the other route when needed.
-5. When the user names an artist, resolve exact name/alias hits through `GET /ws/2/artist/`; when an artist or title is named, search `GET /ws/2/recording/` and locally enforce exact normalized matches.
-6. Deduplicate targeted, ListenBrainz, and MusicBrainz tag-search recording MBIDs; enrich ListenBrainz discoveries; and retain MusicBrainz title, artist, duration, ISRC, release, and community tags.
-7. Filter and score the returned candidates, applying `artistScope=only` only when the user explicitly asks for that artist's songs. When at least three candidates carry a requested weather/vibe tag, select only from that strict context pool; otherwise broaden explicitly and report `contextMatchMode=broadened`.
-8. If the general live request fails, is rate-limited, exceeds its deadline, returns an invalid response, or leaves fewer than three candidates, switch explicitly to the bundled 67-track fallback catalog. Explicit artist-only no-match/shortage errors instead direct the caller to another spelling or an authorized provider search.
+1. Preserve the user's complete original sentence as provenance; never paste that full sentence into a catalog query.
+2. Accept bounded host interpretation of the whole sentence as continuous current/target valence, energy, and acousticness axes with 1–8 concise discovery tags and optional exclusion tags. A request containing `requestText` without meaningful `semanticIntent` returns `SEMANTIC_INTENT_REQUIRED` instead of silently defaulting. Validate every axis and require one to five English catalog words per semantic tag; case is accepted for prior refinement-state compatibility and normalized at the outbound boundary. The JSON Schema-visible pattern rejects common credential/secret, explicit personal name/address, request-copy marker, personal numeric, and opaque-ID forms.
+3. Use the continuous vectors for phase interpolation and candidate path distance. Select the nearest of 12 canonical moods only for display/backward compatibility. If semantic intent is absent, use tolerant legacy parsing and report `semanticCoverage=canonical_fallback`.
+4. Build bounded discovery tags from host semantic tags, free-form activity, normalized weather, desired vibe, and explicit preferences. Exclusion tags are local candidate filters.
+5. Query `GET /1/lb-radio/tags` and MusicBrainz `GET /ws/2/recording/?query=tag:...`. Generic legacy requests can finish on a feasible ListenBrainz batch. Semantic/context cold paths start ListenBrainz first and launch the bounded MusicBrainz hedge after 175 ms only when strict metadata has not arrived. A strict first batch returns immediately and cancels an already-started MusicBrainz loser before it can consume the global rate-limit queue. A broadened first batch waits only within the 2.4-second total hedge window for a strict peer before proceeding. Exact repeated discovery decisions are cached for ten minutes, so warm calls perform only the final ranking.
+6. When the user names an artist, resolve exact name/alias hits through `GET /ws/2/artist/`; when an artist or title is named, search `GET /ws/2/recording/` and locally enforce exact normalized matches.
+7. Deduplicate targeted, ListenBrainz, and MusicBrainz tag-search recording MBIDs, retain factual metadata, apply hard filters and exclusion tags, and rank with the continuous semantic path.
+8. Prefer candidates carrying requested semantic/context tags. Report `contextMatchMode=strict` only when the selected tracks collectively expose every requested dynamic semantic tag; weather and other compatibility context tags remain additional ranking signals. Otherwise report `broadened` with `matchedSemanticTags` and `unmatchedSemanticTags`. This is not represented as proof that every requested nuance exists in community metadata.
+9. If public discovery fails or remains too small, switch explicitly to the 67-track fallback. Explicit artist-only no-match/shortage errors instead direct the caller to another spelling or an authorized provider search.
 
 The live data is broad public community metadata, not a complete or guaranteed representation of every release or streaming service.
 
@@ -66,7 +69,7 @@ The caller passes the prior result's `structuredContent.refinementState` unchang
 
 ## Deterministic journey ranking
 
-Candidates are scored against interpolated mood vectors for the three phases. The scoring combines metadata tags, target-vector distance, explicit likes or recent-play signals supplied by an upstream provider, favorite/avoided artists and genres, discovery preference, duration fit, weather/activity tags, and artist diversity.
+Candidates are scored against the continuous current→target vectors interpolated for the three phases. The scoring combines metadata tags, target-vector distance, dynamic inclusion/exclusion tags, explicit likes or recent-play signals supplied by an upstream provider, favorite/avoided artists and genres, discovery preference, duration fit, weather/activity tags, and artist diversity.
 
 A bounded beam search chooses an ordered sequence within the requested 10–60 minute budget. Stable candidate identifiers break ties, so identical inputs and candidate data produce the same order. These scores are MoodTransit editorial calculations, not official audio features or therapeutic measurements.
 

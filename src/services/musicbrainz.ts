@@ -20,6 +20,7 @@ export const MUSICBRAINZ_ATTRIBUTION =
 export type MusicBrainzErrorCode =
   | "INVALID_INPUT"
   | "AMBIGUOUS_ARTIST"
+  | "ABORTED"
   | "DEADLINE_EXCEEDED"
   | "RATE_LIMITED"
   | "UPSTREAM_NETWORK"
@@ -62,6 +63,11 @@ export interface MusicBrainzCandidateQuery {
   /** Public recording tags used for broad mood, weather, genre, or vibe discovery. */
   tags?: readonly string[];
   count?: number;
+}
+
+export interface MusicBrainzSearchOptions {
+  /** Cancels a no-longer-needed hedge before it can occupy the global rate-limit queue. */
+  signal?: AbortSignal;
 }
 
 export interface MusicBrainzMatchedArtist {
@@ -128,6 +134,13 @@ interface CacheEntry {
   value: MusicBrainzCandidateResult;
 }
 
+interface InFlightEntry {
+  promise: Promise<MusicBrainzCandidateResult>;
+  controller: AbortController;
+  subscribers: number;
+  settled: boolean;
+}
+
 type JsonRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -140,6 +153,14 @@ function invalidInput(message: string): never {
 
 function deadlineError(message = "MusicBrainz total deadline was exceeded"): MusicBrainzServiceError {
   return new MusicBrainzServiceError("DEADLINE_EXCEEDED", message, { retryable: true });
+}
+
+function abortedError(): MusicBrainzServiceError {
+  return new MusicBrainzServiceError("ABORTED", "MusicBrainz search was cancelled because another public source already satisfied the request", { retryable: false });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortedError();
 }
 
 function normalizeTextKey(value: string): string {
@@ -525,7 +546,7 @@ export class MusicBrainzService {
   private readonly now: () => number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly cache = new Map<string, CacheEntry>();
-  private readonly inFlight = new Map<string, Promise<MusicBrainzCandidateResult>>();
+  private readonly inFlight = new Map<string, InFlightEntry>();
   private rateTail: Promise<void> = Promise.resolve();
   private nextRequestAt = 0;
 
@@ -536,7 +557,7 @@ export class MusicBrainzService {
     this.cacheMaxEntries = options.cacheMaxEntries ?? 128;
     this.maxInFlightQueries = options.maxInFlightQueries ?? 32;
     this.maxResponseBytes = options.maxResponseBytes ?? 512 * 1_024;
-    this.userAgent = options.userAgent ?? "MoodTransit/2.2 (+https://github.com/Festinz/mood-transit-mcp)";
+    this.userAgent = options.userAgent ?? "MoodTransit/2.3 (+https://github.com/Festinz/mood-transit-mcp)";
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
 
@@ -633,38 +654,70 @@ export class MusicBrainzService {
     }
   }
 
-  private async waitForRateTurn(previous: Promise<void>, deadlineAt: number): Promise<void> {
+  private async awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+    throwIfAborted(signal);
+    if (!signal) return promise;
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(abortedError());
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      return await Promise.race([promise, aborted]);
+    } finally {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  private async subscribeToInFlight(entry: InFlightEntry, signal?: AbortSignal): Promise<MusicBrainzCandidateResult> {
+    throwIfAborted(signal);
+    entry.subscribers += 1;
+    try {
+      return cloneResult(await this.awaitWithAbort(entry.promise, signal));
+    } finally {
+      entry.subscribers -= 1;
+      if (entry.subscribers === 0 && !entry.settled) {
+        for (const [key, active] of this.inFlight) {
+          if (active === entry) this.inFlight.delete(key);
+        }
+        entry.controller.abort();
+      }
+    }
+  }
+
+  private async waitForRateTurn(previous: Promise<void>, deadlineAt: number, signal?: AbortSignal): Promise<void> {
     const remaining = deadlineAt - this.now();
     if (remaining <= 0) throw deadlineError();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
+      await this.awaitWithAbort(Promise.race([
         previous,
         new Promise<void>((_resolve, reject) => {
           timeout = setTimeout(() => reject(deadlineError("MusicBrainz rate-limit queue exceeded the total deadline")), remaining);
         })
-      ]);
+      ]), signal);
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
     }
   }
 
-  private async runRateLimited<T>(deadlineAt: number, operation: () => Promise<T>): Promise<T> {
+  private async runRateLimited<T>(deadlineAt: number, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const previous = this.rateTail;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     this.rateTail = gate;
     let acquired = false;
     try {
-      await this.waitForRateTurn(previous, deadlineAt);
+      await this.waitForRateTurn(previous, deadlineAt, signal);
       acquired = true;
       const waitMs = Math.max(0, this.nextRequestAt - this.now());
       if (waitMs > 0) {
         if (waitMs >= deadlineAt - this.now()) {
           throw deadlineError("The required MusicBrainz one-request-per-second wait exceeds the total deadline");
         }
-        await this.sleep(waitMs);
+        await this.awaitWithAbort(this.sleep(waitMs), signal);
       }
+      throwIfAborted(signal);
       if (this.now() >= deadlineAt) throw deadlineError();
       const requestStartedAt = Math.max(this.now(), this.nextRequestAt);
       this.nextRequestAt = requestStartedAt + REQUEST_INTERVAL_MS;
@@ -736,12 +789,15 @@ export class MusicBrainzService {
     }
   }
 
-  private async requestJson(url: URL, deadlineAt: number): Promise<unknown> {
+  private async requestJson(url: URL, deadlineAt: number, signal?: AbortSignal): Promise<unknown> {
     this.assertAllowedRequestUrl(url);
+    throwIfAborted(signal);
     return this.runRateLimited(deadlineAt, async () => {
       const remaining = deadlineAt - this.now();
       if (remaining <= 0) throw deadlineError();
       const controller = new AbortController();
+      const cancelFromCaller = () => controller.abort(abortedError());
+      signal?.addEventListener("abort", cancelFromCaller, { once: true });
       const timeout = setTimeout(
         () => controller.abort(new DOMException("MusicBrainz total deadline was exceeded", "TimeoutError")),
         remaining
@@ -795,6 +851,7 @@ export class MusicBrainzService {
         return await this.readBoundedJson(response);
       } catch (error) {
         if (error instanceof MusicBrainzServiceError) throw error;
+        if (signal?.aborted) throw abortedError();
         if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
           throw new MusicBrainzServiceError(
             "DEADLINE_EXCEEDED",
@@ -809,11 +866,12 @@ export class MusicBrainzService {
         );
       } finally {
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", cancelFromCaller);
       }
-    });
+    }, signal);
   }
 
-  private async resolveArtist(term: QueryTerm, deadlineAt: number): Promise<MusicBrainzMatchedArtist | undefined> {
+  private async resolveArtist(term: QueryTerm, deadlineAt: number, signal?: AbortSignal): Promise<MusicBrainzMatchedArtist | undefined> {
     const escapedName = escapeLucenePhrase(term.display);
     const url = new URL("/ws/2/artist/", MUSICBRAINZ_ORIGIN);
     url.search = new URLSearchParams({
@@ -821,7 +879,7 @@ export class MusicBrainzService {
       fmt: "json",
       limit: "10"
     }).toString();
-    return chooseExactArtist(term, parseArtistSearch(await this.requestJson(url, deadlineAt)));
+    return chooseExactArtist(term, parseArtistSearch(await this.requestJson(url, deadlineAt, signal)));
   }
 
   private recordingSearchUrl(query: NormalizedQuery, artistMbids: readonly string[]): URL {
@@ -864,11 +922,12 @@ export class MusicBrainzService {
     };
   }
 
-  private async fetchUncached(query: NormalizedQuery, cacheKey: string): Promise<MusicBrainzCandidateResult> {
+  private async fetchUncached(query: NormalizedQuery, cacheKey: string, signal?: AbortSignal): Promise<MusicBrainzCandidateResult> {
     const deadlineAt = this.now() + this.deadlineMs;
+    throwIfAborted(signal);
     const matchedArtists: MusicBrainzMatchedArtist[] = [];
     for (const artist of query.artists) {
-      const match = await this.resolveArtist(artist, deadlineAt);
+      const match = await this.resolveArtist(artist, deadlineAt, signal);
       if (match) matchedArtists.push(match);
     }
     const matchedArtistMbids = [...new Set([
@@ -879,7 +938,7 @@ export class MusicBrainzService {
     let candidates: ExternalMusicCandidate[] = [];
     // Do not silently broaden an artist-qualified request when none of its artist names resolved exactly.
     if (query.artists.length === 0 || matchedArtistMbids.length > 0) {
-      const recordings = await this.requestJson(this.recordingSearchUrl(query, matchedArtistMbids), deadlineAt);
+      const recordings = await this.requestJson(this.recordingSearchUrl(query, matchedArtistMbids), deadlineAt, signal);
       candidates = parseRecordings(
         recordings,
         query,
@@ -888,19 +947,21 @@ export class MusicBrainzService {
       );
     }
 
+    throwIfAborted(signal);
     const result = this.makeResult(candidates, matchedArtists, matchedArtistMbids);
     this.setCached(cacheKey, result);
     return result;
   }
 
-  async searchCandidates(input: MusicBrainzCandidateQuery): Promise<MusicBrainzCandidateResult> {
+  async searchCandidates(input: MusicBrainzCandidateQuery, options: MusicBrainzSearchOptions = {}): Promise<MusicBrainzCandidateResult> {
+    throwIfAborted(options.signal);
     const query = normalizeQuery(input);
     const cacheKey = this.cacheKey(query);
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
 
     const existing = this.inFlight.get(cacheKey);
-    if (existing) return cloneResult(await existing);
+    if (existing) return this.subscribeToInFlight(existing, options.signal);
     if (this.inFlight.size >= this.maxInFlightQueries) {
       throw new MusicBrainzServiceError(
         "RATE_LIMITED",
@@ -909,12 +970,19 @@ export class MusicBrainzService {
       );
     }
 
-    let pending!: Promise<MusicBrainzCandidateResult>;
-    pending = this.fetchUncached(query, cacheKey).finally(() => {
-      if (this.inFlight.get(cacheKey) === pending) this.inFlight.delete(cacheKey);
+    const controller = new AbortController();
+    const entry: InFlightEntry = {
+      promise: Promise.resolve(undefined as never),
+      controller,
+      subscribers: 0,
+      settled: false
+    };
+    entry.promise = this.fetchUncached(query, cacheKey, controller.signal).finally(() => {
+      entry.settled = true;
+      if (this.inFlight.get(cacheKey) === entry) this.inFlight.delete(cacheKey);
     });
-    this.inFlight.set(cacheKey, pending);
-    return cloneResult(await pending);
+    this.inFlight.set(cacheKey, entry);
+    return this.subscribeToInFlight(entry, options.signal);
   }
 
   clearCache(): void {

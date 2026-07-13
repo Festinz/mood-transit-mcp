@@ -74,7 +74,7 @@ describe("MusicBrainz service", () => {
       expect(init.redirect).toBe("manual");
       const headers = new Headers(init.headers);
       expect(headers.get("accept")).toBe("application/json");
-      expect(headers.get("user-agent")).toContain("MoodTransit/2.2");
+      expect(headers.get("user-agent")).toContain("MoodTransit/2.3");
       expect(headers.get("user-agent")).toContain("github.com/Festinz/mood-transit-mcp");
 
       if (url.pathname === "/ws/2/artist/") {
@@ -205,6 +205,32 @@ describe("MusicBrainz service", () => {
     expect(cached.source).toBe("musicbrainz-cache");
     expect(cached.candidates[0]?.title).toBe("LOVE ATTACK");
     expect(cached.candidates[0]?.artistMbids).toEqual([RESCENE_MBID]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let one cancelled subscriber abort another subscriber to the same in-flight search", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const mockFetch = vi.fn<typeof fetch>(async () => {
+      await gate;
+      return jsonResponse({ recordings: [recordingFixture()] });
+    });
+    const service = new MusicBrainzService({ fetchImpl: mockFetch });
+    const hedgeController = new AbortController();
+
+    const cancelledHedge = service.searchCandidates(
+      { trackTitles: ["LOVE ATTACK"] },
+      { signal: hedgeController.signal }
+    );
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    const foreground = service.searchCandidates({ trackTitles: ["love attack"] });
+    hedgeController.abort();
+
+    await expect(cancelledHedge).rejects.toMatchObject({ code: "ABORTED", retryable: false });
+    release();
+    await expect(foreground).resolves.toMatchObject({
+      candidates: [expect.objectContaining({ title: "LOVE ATTACK" })]
+    });
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -366,6 +392,38 @@ describe("MusicBrainz service", () => {
     await expect(first).resolves.toMatchObject({ candidates: [] });
   });
 
+  it("removes an aborted hedge from the global rate-limit queue before a foreground search", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let fetchCount = 0;
+    const mockFetch = vi.fn<typeof fetch>(async () => {
+      fetchCount += 1;
+      if (fetchCount === 1) await firstGate;
+      return jsonResponse({ recordings: [] });
+    });
+    const service = new MusicBrainzService({
+      fetchImpl: mockFetch,
+      sleep: async () => undefined
+    });
+
+    const first = service.searchCandidates({ tags: ["first"] });
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    const controller = new AbortController();
+    const cancelledHedge = service.searchCandidates({ tags: ["cancelled"] }, { signal: controller.signal });
+    controller.abort();
+    await expect(cancelledHedge).rejects.toMatchObject({ code: "ABORTED", retryable: false });
+
+    const foreground = service.searchCandidates({ tags: ["foreground"] });
+    releaseFirst();
+    await expect(first).resolves.toMatchObject({ candidates: [] });
+    await expect(foreground).resolves.toMatchObject({ candidates: [] });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls.map(([input]) => requestUrl(input).searchParams.get("query"))).toEqual([
+      '(tag:"first")',
+      '(tag:"foreground")'
+    ]);
+  });
+
   it("enforces one total deadline across artist resolution and the required rate-limit wait", async () => {
     let now = 0;
     const sleep = vi.fn(async (milliseconds: number) => { now += milliseconds; });
@@ -412,6 +470,6 @@ describe("MusicBrainz service", () => {
     expect(mockFetch).not.toHaveBeenCalled();
     expect(() => new MusicBrainzService({ cacheTtlMs: 600_001 })).toThrow(MusicBrainzServiceError);
     expect(() => new MusicBrainzService({ userAgent: "anonymous" })).toThrow(MusicBrainzServiceError);
-    expect(() => new MusicBrainzService({ userAgent: "MoodTransit/2.2" })).toThrow(MusicBrainzServiceError);
+    expect(() => new MusicBrainzService({ userAgent: "MoodTransit/2.3" })).toThrow(MusicBrainzServiceError);
   });
 });

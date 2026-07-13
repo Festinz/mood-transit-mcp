@@ -129,6 +129,16 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     ].filter(Boolean).join(" · "));
   }
 
+  if (journey.context.requestText || journey.context.semanticIntent) {
+    const coverageLabel = journey.context.semanticCoverage === "full"
+      ? "연속 current/target 의미 좌표"
+      : journey.context.semanticCoverage === "partial"
+        ? "일부 의미 좌표·동적 태그"
+        : "호환 감정 앵커";
+    const semanticTags = journey.context.semanticIntent?.discoveryTags ?? [];
+    lines.push(`자유 문장 해석: ${coverageLabel}${semanticTags.length ? ` · 검색 태그 ${semanticTags.map(escapeMarkdown).join(", ")}` : ""}`);
+  }
+
   if (options.searchResolution) {
     const requested = [
       options.searchResolution.requestedArtists.length
@@ -222,7 +232,15 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     "3단계 감정 경로와 점수는 기분환승의 편집적 계산이며 공식 음향 특성이나 치료 효과가 아닙니다."
   ];
   if (journey.context.contextMatchMode === "broadened") {
-    limitations.push("공개 메타데이터에서 날씨·분위기 태그가 확인된 후보가 3개 미만이어서 감정 경로와 일반 태그까지 범위를 넓혔습니다.");
+    limitations.push("선택 곡의 공개 메타데이터에서 요청한 의미·날씨·분위기 태그를 모두 충분히 확인하지 못해 감정 경로와 일반 태그까지 범위를 넓혔습니다.");
+  }
+  if (journey.context.unmatchedSemanticTags?.length) {
+    limitations.push(`선택 곡 메타데이터에서 직접 확인하지 못한 동적 태그: ${journey.context.unmatchedSemanticTags.join(", ")}`);
+  }
+  if (journey.context.semanticIntent) {
+    limitations.push("연속 감정 좌표와 동적 음악 태그는 대화 모델이 사용자 원문에서 해석한 soft preference이며 공급자의 공식 음향 특성이 아닙니다.");
+  } else if (journey.context.requestText) {
+    limitations.push("호스트가 자유 문장의 연속 의미 좌표·동적 태그를 제공하지 않아 기존 감정 앵커와 일반 공개 검색으로 해석했습니다.");
   }
   if (options.fallbackReason) limitations.push(`실시간 후보 fallback 사유: ${options.fallbackReason}`);
   if (options.searchResolution) {
@@ -261,6 +279,19 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     estimatedMinutes: journey.estimatedMinutes ?? 0,
     durationBasis,
     context: journey.context,
+    interpretation: {
+      semanticSource: journey.context.semanticIntent ? "host_supplied" : "legacy_compatibility",
+      semanticCoverage: journey.context.semanticCoverage ?? "canonical_fallback",
+      canonicalAnchors: { current: journey.currentMood, target: journey.targetMood },
+      ...(journey.context.requestText ? { requestText: journey.context.requestText } : {}),
+      ...(journey.context.semanticIntent?.current ? { currentAxes: journey.context.semanticIntent.current } : {}),
+      ...(journey.context.semanticIntent?.target ? { targetAxes: journey.context.semanticIntent.target } : {}),
+      discoveryTags: journey.context.semanticIntent?.discoveryTags ?? [],
+      excludeTags: journey.context.semanticIntent?.excludeTags ?? [],
+      matchedSemanticTags: journey.context.matchedSemanticTags ?? [],
+      unmatchedSemanticTags: journey.context.unmatchedSemanticTags ?? [],
+      contextMatchMode: journey.context.contextMatchMode ?? "not_requested"
+    },
     stages,
     sources,
     limitations,

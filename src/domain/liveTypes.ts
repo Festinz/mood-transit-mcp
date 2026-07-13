@@ -40,6 +40,27 @@ export interface TasteProfile {
   instrumentalOnly?: boolean;
 }
 
+/**
+ * A continuous interpretation supplied by the MCP host. Canonical moods remain
+ * useful as display anchors, while these axes retain nuance from unrestricted
+ * natural-language requests.
+ */
+export interface SemanticPoint {
+  label?: string;
+  valence: number;
+  energy: number;
+  acousticness: number;
+}
+
+export interface SemanticIntent {
+  current?: SemanticPoint;
+  target?: SemanticPoint;
+  discoveryTags?: string[];
+  excludeTags?: string[];
+}
+
+export type SemanticCoverage = "full" | "partial" | "canonical_fallback";
+
 export interface LiveJourneyTrack extends ExternalMusicCandidate {
   phase: Phase;
   position: number;
@@ -65,7 +86,12 @@ export interface LiveJourney {
     desiredVibe?: string;
     contextTags?: string[];
     contextMatchMode?: "strict" | "broadened" | "not_requested";
+    matchedSemanticTags?: string[];
+    unmatchedSemanticTags?: string[];
     activity?: string;
+    requestText?: string;
+    semanticIntent?: SemanticIntent;
+    semanticCoverage?: SemanticCoverage;
     sourceNote?: string;
   };
   tracks: LiveJourneyTrack[];
