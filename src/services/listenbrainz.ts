@@ -442,7 +442,7 @@ export class ListenBrainzService {
     this.deadlineMs = options.deadlineMs ?? 2_700;
     this.cacheTtlMs = options.cacheTtlMs ?? 10 * 60 * 1_000;
     this.cacheMaxEntries = options.cacheMaxEntries ?? 128;
-    this.userAgent = options.userAgent ?? "MoodTransit/2.1 (+https://github.com/Festinz/mood-transit-mcp)";
+    this.userAgent = options.userAgent ?? "MoodTransit/2.2 (+https://github.com/Festinz/mood-transit-mcp)";
     this.now = options.now ?? Date.now;
 
     if (!Number.isFinite(this.deadlineMs) || this.deadlineMs <= 0 || this.deadlineMs > 10_000) {

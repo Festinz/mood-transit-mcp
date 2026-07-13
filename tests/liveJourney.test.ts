@@ -91,6 +91,62 @@ describe("external candidate ranking", () => {
     expect(journey.tracks.some((track) => track.reason.includes("provider personalization"))).toBe(true);
   });
 
+  it("uses context-matching candidates first and explicitly marks a necessary broadening", () => {
+    const strict = rankExternalCandidates({
+      currentMood: "content",
+      targetMood: "energetic",
+      minutes: 12,
+      desiredVibe: "시원한",
+      contextTags: ["refreshing", "upbeat"]
+    }, [
+      candidate("refresh-1", "content", { tags: ["content", "refreshing"] }),
+      candidate("refresh-2", "joyful", { tags: ["joyful", "upbeat"] }),
+      candidate("refresh-3", "energetic", { tags: ["energetic", "refreshing"] }),
+      candidate("unrelated-1", "content", { personalizationScore: 1 }),
+      candidate("unrelated-2", "joyful", { personalizationScore: 1 }),
+      candidate("unrelated-3", "energetic", { personalizationScore: 1 })
+    ]);
+    expect(strict.context.contextMatchMode).toBe("strict");
+    expect(strict.tracks.every((track) => track.id.startsWith("refresh-"))).toBe(true);
+    expect(strict.context.sourceNote).toContain("Ranked 3 of 6");
+
+    const broadened = rankExternalCandidates({
+      currentMood: "content",
+      targetMood: "energetic",
+      minutes: 12,
+      contextTags: ["refreshing"]
+    }, [
+      candidate("only-refresh-1", "content", { tags: ["content", "refreshing"] }),
+      candidate("only-refresh-2", "energetic", { tags: ["energetic", "refreshing"] }),
+      candidate("general-1", "content"),
+      candidate("general-2", "joyful"),
+      candidate("general-3", "energetic")
+    ]);
+    expect(broadened.context.contextMatchMode).toBe("broadened");
+    expect(broadened.tracks.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("broadens a context pool that has three matches but cannot fill three stages within the budget", () => {
+    const journey = rankExternalCandidates({
+      currentMood: "content",
+      targetMood: "energetic",
+      minutes: 10,
+      contextTags: ["refreshing"]
+    }, [
+      candidate("refresh-long-1", "content", { durationSec: 301, tags: ["content", "refreshing"] }),
+      candidate("refresh-long-2", "joyful", { durationSec: 301, tags: ["joyful", "refreshing"] }),
+      candidate("refresh-long-3", "energetic", { durationSec: 301, tags: ["energetic", "refreshing"] }),
+      candidate("general-1", "content"),
+      candidate("general-2", "joyful"),
+      candidate("general-3", "energetic")
+    ]);
+
+    expect(journey.context.contextMatchMode).toBe("broadened");
+    expect(journey.tracks).toHaveLength(3);
+    expect(journey.tracks.every((track) => track.id.startsWith("general-"))).toBe(true);
+    expect(journey.context.sourceNote).toContain("Ranked 6 of 6");
+  });
+
   it("deduplicates cross-provider recordings and is deterministic independent of input order", () => {
     const sharedMelon = candidate("melon-shared", "calm", {
       title: "Same Song",

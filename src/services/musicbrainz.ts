@@ -7,6 +7,8 @@ const MAX_ARTISTS = 5;
 const MAX_ARTIST_LENGTH = 120;
 const MAX_TRACK_TITLES = 12;
 const MAX_TRACK_TITLE_LENGTH = 160;
+const MAX_TAGS = 8;
+const MAX_TAG_LENGTH = 64;
 const MAX_CANDIDATES = 50;
 const MAX_CACHE_TTL_MS = 10 * 60 * 1_000;
 const MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -57,6 +59,8 @@ export interface MusicBrainzCandidateQuery {
   artistMbids?: readonly string[];
   /** Exact recording titles. MusicBrainz search hits are locally checked for exact normalized equality. */
   trackTitles?: readonly string[];
+  /** Public recording tags used for broad mood, weather, genre, or vibe discovery. */
+  tags?: readonly string[];
   count?: number;
 }
 
@@ -102,6 +106,7 @@ interface NormalizedQuery {
   artists: QueryTerm[];
   artistMbids: string[];
   trackTitles: QueryTerm[];
+  tags: QueryTerm[];
   count: number;
 }
 
@@ -191,14 +196,15 @@ function normalizeQuery(input: MusicBrainzCandidateQuery): NormalizedQuery {
     MAX_TRACK_TITLE_LENGTH,
     "trackTitles"
   );
-  if (artists.length === 0 && artistMbids.length === 0 && trackTitles.length === 0) {
-    invalidInput("At least one artist, artist MBID, or track title is required");
+  const tags = normalizeTerms(rawInput.tags, MAX_TAGS, MAX_TAG_LENGTH, "tags");
+  if (artists.length === 0 && artistMbids.length === 0 && trackTitles.length === 0 && tags.length === 0) {
+    invalidInput("At least one artist, artist MBID, track title, or tag is required");
   }
   const rawCount = rawInput.count ?? 24;
   if (typeof rawCount !== "number" || !Number.isInteger(rawCount) || rawCount < 1 || rawCount > MAX_CANDIDATES) {
     invalidInput(`count must be an integer from 1 to ${MAX_CANDIDATES}`);
   }
-  return { artists, artistMbids, trackTitles, count: rawCount };
+  return { artists, artistMbids, trackTitles, tags, count: rawCount };
 }
 
 function cleanExternalText(value: unknown, maxLength: number): string | undefined {
@@ -530,7 +536,7 @@ export class MusicBrainzService {
     this.cacheMaxEntries = options.cacheMaxEntries ?? 128;
     this.maxInFlightQueries = options.maxInFlightQueries ?? 32;
     this.maxResponseBytes = options.maxResponseBytes ?? 512 * 1_024;
-    this.userAgent = options.userAgent ?? "MoodTransit/2.1 (+https://github.com/Festinz/mood-transit-mcp)";
+    this.userAgent = options.userAgent ?? "MoodTransit/2.2 (+https://github.com/Festinz/mood-transit-mcp)";
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
 
@@ -569,6 +575,7 @@ export class MusicBrainzService {
       artists: query.artists.map((term) => term.key),
       artistMbids: query.artistMbids,
       trackTitles: query.trackTitles.map((term) => term.key),
+      tags: query.tags.map((term) => term.key),
       count: query.count
     });
   }
@@ -825,6 +832,11 @@ export class MusicBrainzService {
     if (query.trackTitles.length > 0) {
       clauses.push(`(${query.trackTitles
         .map((term) => `recording:"${escapeLucenePhrase(term.display)}"`)
+        .join(" OR ")})`);
+    }
+    if (query.tags.length > 0) {
+      clauses.push(`(${query.tags
+        .map((term) => `tag:"${escapeLucenePhrase(term.display)}"`)
         .join(" OR ")})`);
     }
     const url = new URL("/ws/2/recording/", MUSICBRAINZ_ORIGIN);

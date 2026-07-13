@@ -1,4 +1,4 @@
-# PlayMCP 등록·심사 입력안 — MoodTransit v2.1
+# PlayMCP 등록·심사 입력안 — MoodTransit v2.2
 
 아래 문구는 콘솔에 그대로 붙여 넣을 수 있는 최종 초안입니다. PlayMCP in KC 배포가 `Active`가 된 뒤 `<PUBLIC_HTTPS_ENDPOINT>`만 실제 HTTPS 주소로 바꿉니다.
 
@@ -15,28 +15,28 @@
 ### MCP 설명 — 500자 이하
 
 ```text
-기분환승은 현재 기분에서 원하는 기분까지 Mirror→Bridge→Arrive 3단계 음악 여정을 만듭니다. 정상 동작 시 ListenBrainz·MusicBrainz 공개 데이터에서 기분·장르뿐 아니라 사용자가 말한 한글/영문 가수명과 곡명을 검색합니다. 공식 Melon MCP가 반환한 후보도 ID·URL을 보존해 같은 방식으로 재배열합니다. 결과의 selectionScope와 searchResolution으로 실제 후보 범위와 이름 일치 여부를 밝힙니다. 67곡은 공개 경로 장애·후보 부족·필터 불충족 시에만 사용합니다. YouTube Music·Melon 링크는 title+artist 검색 링크이며 전체 카탈로그 접근이나 재생 가능 여부를 뜻하지 않습니다.
+기분환승은 현재 기분에서 원하는 기분까지 Mirror→Bridge→Arrive 3단계 음악 여정을 만듭니다. 정상 동작 시 ListenBrainz·MusicBrainz 공개 데이터에서 기분·날씨·활동·분위기와 사용자가 말한 한글/영문 가수명·곡명을 검색합니다. 공식 Melon MCP가 반환한 후보도 ID·URL을 보존해 같은 방식으로 재배열합니다. 결과의 selectionScope·searchResolution·context로 실제 후보 범위와 조건 일치 여부를 밝힙니다. 67곡은 공개 경로 장애나 후보 부족 시에만 사용합니다. YouTube Music·Melon 링크는 검색 링크이며 전체 카탈로그 접근이나 재생 가능 여부를 뜻하지 않습니다.
 ```
 
 ### 대화 예시 3개 — 각각 40자 이하
 
 ```text
-리센느 노래 중 지금 기분에 맞는 곡 골라줘
+오늘 너무 더운데 시원한 노래 틀어줘
 ```
 
 ```text
-멜론에서 리센느 검색해 30분 플리 짜줘
+퇴근길인데 축 처져, 기분 좀 올려줘
 ```
 
 ```text
-유튜브에서 리센느 기분 좋아지는 노래 찾아줘
+비 오는 밤에 잔잔한 플리 부탁해
 ```
 
 각 예시는 40자 이하입니다.
 
 ## 도구 심사 설명 요약
 
-- `build_live_mood_journey`: 다른 음악 MCP의 후보가 없을 때 사용합니다. ListenBrainz 기분·장르 후보와 MusicBrainz의 아티스트 이름/별칭·정확한 곡명 검색 후보를 합쳐 Mirror → Bridge → Arrive 순서로 재배열합니다(같은 조건은 10분 캐시 가능). `preferences.preferredArtists`, `preferredTracks`, 명시적인 경우의 `artistScope=only`만 검색 조건으로 사용합니다. 공개 경로 장애·후보 부족·필터 불충족 시에만 비상 후보를 사용하며, 명시적 아티스트 한정 검색은 관련 없는 fallback 대신 구조화된 검색 오류를 반환합니다.
+- `build_live_mood_journey`: 다른 음악 MCP의 후보가 없을 때 사용합니다. ListenBrainz와 MusicBrainz에서 기분·날씨·활동·분위기 후보를 동적으로 찾고, 아티스트 이름/별칭과 정확한 곡명도 검색해 Mirror → Bridge → Arrive 순서로 재배열합니다(같은 조건은 10분 캐시 가능). 맥락 메타데이터가 충분하면 일치 후보만 사용하고, 부족해 범위를 넓히면 결과의 `contextMatchMode=broadened`로 밝힙니다. 공개 경로 장애나 후보 부족 시에만 비상 후보를 사용하며, 명시적 아티스트 한정 검색은 관련 없는 fallback 대신 구조화된 검색 오류를 반환합니다.
 - `arrange_candidate_mood_journey`: 공식 Melon MCP나 사용자가 활성화한 YouTube Data MCP 등 음악 도구가 먼저 반환한 3~20개 후보만 재배열합니다. Melon 요청은 `search_melon_music_contents`, YouTube 요청은 `search_videos` 또는 `search_playlists`로 실제 후보를 먼저 받은 뒤 title, artist, 공급자 ID, 정규화된 URL, 원래 순위를 보존해 전달합니다. 기분환승이 해당 공급자의 전체 카탈로그에 직접 접근했다고 주장하지 않습니다.
 - `refine_mood_journey`: 앞선 결과의 `structuredContent.refinementState`를 그대로 받아 밝기·에너지·익숙함/발견·시간·제외곡·회피 아티스트를 반영합니다. `live_open_catalog`이면 공개 후보를 다시 조회할 수 있고, `provided_candidates`이면 상태값 안의 압축된 공급자 후보 묶음 밖의 곡을 추가하지 않습니다. 서버에 사용자별 대화 상태를 저장하지 않습니다.
 - 세 도구는 모두 읽기 전용·비파괴이며 음원·가사·앨범아트를 반환하거나 저장하지 않습니다. 계정, 개인 청취 기록, API 키, OAuth token을 수집하지 않습니다.

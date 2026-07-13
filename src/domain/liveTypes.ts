@@ -62,6 +62,9 @@ export interface LiveJourney {
   candidateSource: "listenbrainz-live" | "external-candidates" | "curated-fallback";
   context: {
     weather?: string;
+    desiredVibe?: string;
+    contextTags?: string[];
+    contextMatchMode?: "strict" | "broadened" | "not_requested";
     activity?: string;
     sourceNote?: string;
   };

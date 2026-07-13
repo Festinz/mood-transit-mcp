@@ -78,6 +78,8 @@ export interface PlanLiveJourneyBriefOptions {
   targetMood: string;
   minutes: number;
   weather?: string;
+  desiredVibe?: string;
+  contextTags?: string[];
   activity?: string;
   tasteProfile?: TasteProfile;
 }
@@ -549,9 +551,9 @@ function scoreCandidate(
   const moodDistance = vectorDistance(prepared.inferred.vector, slot.targetVector);
   const durationDifference = Math.abs(prepared.effectiveDurationSec - slot.idealDurationSec) / Math.max(1, slot.idealDurationSec);
   const contextualTerms = [...prepared.normalizedTags, ...prepared.normalizedGenres];
-  const weatherMatch = options.weather
-    ? contextualTerms.some((term) => matchesTerm(term, [options.weather ?? ""]))
-    : false;
+  const contextTerms = options.contextTags ?? [];
+  const contextMatch = contextTerms.length > 0
+    && contextualTerms.some((term) => matchesTerm(term, contextTerms));
   const activityMatch = options.activity
     ? contextualTerms.some((term) => matchesTerm(term, [options.activity ?? ""]))
     : false;
@@ -565,7 +567,7 @@ function scoreCandidate(
   if (favoriteGenre) score += 12;
   score += (familiarity - 0.5) * (familiarityPreference - 0.5) * 36;
   if (!prepared.inferred.hasMoodSignal) score += prepared.personalization * 12;
-  if (weatherMatch) score += 4;
+  if (contextMatch) score += 8;
   if (activityMatch) score += 4;
   score -= repeatedArtistCount * 16;
   score -= durationDifference * 3;
@@ -675,6 +677,10 @@ function reasonFor(prepared: PreparedCandidate, phase: Phase, options: RankExter
   if (favoriteArtistMatch(prepared.candidate, options.tasteProfile ?? {})) evidence.push("선호 아티스트");
   if (matchesTerm(normalizeText(prepared.candidate.title), options.tasteProfile?.favoriteTracks ?? [])) evidence.push("지정 곡");
   if (genresMatch([...prepared.normalizedGenres, ...prepared.normalizedTags], options.tasteProfile?.favoriteGenres ?? [])) evidence.push("선호 장르");
+  if ((options.contextTags ?? []).length > 0
+    && [...prepared.normalizedGenres, ...prepared.normalizedTags].some((term) => matchesTerm(term, options.contextTags ?? []))) {
+    evidence.push("날씨·분위기 맥락");
+  }
   if (!prepared.inferred.hasMoodSignal && prepared.personalization > 0) evidence.push("공급자 개인화(provider personalization)");
   const evidenceText = evidence.length > 0 ? ` 취향 근거: ${evidence.join(", ")}.` : "";
   if (!prepared.inferred.hasMoodSignal) {
@@ -695,6 +701,8 @@ function journeyId(options: RankExternalCandidatesOptions, tracks: readonly Prep
     targetMood: options.targetMood,
     minutes: options.minutes,
     weather: options.weather,
+    desiredVibe: options.desiredVibe,
+    contextTags: options.contextTags,
     activity: options.activity,
     tasteProfile: options.tasteProfile,
     tracks: tracks.map((track) => track.stableKey)
@@ -718,18 +726,35 @@ export function rankExternalCandidates(
   if (pool.length < 3) {
     throw new Error("At least three usable candidates are required after exclusions and preference filters");
   }
-  const desired = desiredTrackCount(pool, budgetSec);
+  const contextTags = options.contextTags ?? [];
+  const strictContextPool = contextTags.length === 0
+    ? pool
+    : pool.filter((prepared) => (
+        [...prepared.normalizedTags, ...prepared.normalizedGenres]
+          .some((term) => matchesTerm(term, contextTags))
+      ));
+  let contextMatchMode: NonNullable<LiveJourney["context"]["contextMatchMode"]> = contextTags.length === 0
+    ? "not_requested"
+    : strictContextPool.length >= 3 ? "strict" : "broadened";
+  let selectionPool = contextMatchMode === "strict" ? strictContextPool : pool;
   let selected: SelectionState | undefined;
   let selectedSlots: PlannedSlot[] = [];
 
-  for (let count = desired; count >= 1; count -= 1) {
-    const slots = buildSlots(count, currentMood, targetMood, options.minutes);
-    const result = selectForSlots(pool, slots, options, budgetSec);
-    if (result) {
-      selected = result;
-      selectedSlots = slots;
-      break;
+  const selectFromPool = (candidatePool: readonly PreparedCandidate[]) => {
+    const desired = desiredTrackCount(candidatePool, budgetSec);
+    for (let count = desired; count >= 1; count -= 1) {
+      const slots = buildSlots(count, currentMood, targetMood, options.minutes);
+      const result = selectForSlots(candidatePool, slots, options, budgetSec);
+      if (result) return { selected: result, selectedSlots: slots };
     }
+    return { selected: undefined, selectedSlots: [] };
+  };
+
+  ({ selected, selectedSlots } = selectFromPool(selectionPool));
+  if ((!selected || selected.tracks.length < 3) && contextMatchMode === "strict") {
+    contextMatchMode = "broadened";
+    selectionPool = pool;
+    ({ selected, selectedSlots } = selectFromPool(selectionPool));
   }
 
   if (!selected || selected.tracks.length < 3) {
@@ -765,8 +790,11 @@ export function rankExternalCandidates(
     candidateSource: options.candidateSource ?? "external-candidates",
     context: {
       ...(options.weather?.trim() ? { weather: options.weather.trim() } : {}),
+      ...(options.desiredVibe?.trim() ? { desiredVibe: options.desiredVibe.trim() } : {}),
+      ...(options.contextTags?.length ? { contextTags: [...options.contextTags] } : {}),
+      contextMatchMode,
       ...(options.activity?.trim() ? { activity: options.activity.trim() } : {}),
-      sourceNote: `Ranked ${pool.length} unique tracks supplied by external providers. Missing durations use a ${DEFAULT_DURATION_SEC}-second planning estimate.`
+      sourceNote: `Ranked ${selectionPool.length} of ${pool.length} unique tracks supplied by external providers. Missing durations use a ${DEFAULT_DURATION_SEC}-second planning estimate.`
     },
     tracks
   };

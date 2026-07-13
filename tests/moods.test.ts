@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeMood } from "../src/domain/moods.js";
+import { interpretMood, musicContextTags, normalizeMood, normalizeWeather } from "../src/domain/moods.js";
 
 describe("mood input validation", () => {
   it("maps a natural generic mood-change target to a hopeful journey", () => {
@@ -25,5 +25,31 @@ describe("mood input validation", () => {
   it("rejects an unsupported mood instead of silently treating it as neutral", () => {
     expect(() => normalizeMood("형용할 수 없는 상태 xyz"))
       .toThrow("지원하지 않는 기분 표현입니다");
+  });
+
+  it("interprets weather and sensory wording safely at the MCP boundary", () => {
+    expect(interpretMood("더운", "content")).toMatchObject({
+      mood: "content",
+      kind: "descriptor",
+      contextTags: expect.arrayContaining(["summer", "chillout"])
+    });
+    expect(interpretMood("시원한", "content")).toMatchObject({
+      mood: "energetic",
+      kind: "descriptor",
+      contextTags: expect.arrayContaining(["refreshing", "upbeat"])
+    });
+    expect(normalizeWeather("오늘 너무 더운데")).toBe("hot");
+    expect(normalizeWeather("선선하고 시원한 날")).toBe("wind");
+    expect(normalizeWeather("맑은 날")).toBe("clear");
+    expect(normalizeWeather("흐려요, 안개도 있어요")).toBe("cloudy");
+    expect(normalizeWeather("천둥 번개가 치는 폭풍")).toBe("rain");
+    expect(normalizeWeather("진눈깨비와 우박")).toBe("snow");
+    expect(normalizeWeather("비교적 맑아요")).toBe("clear");
+    expect(musicContextTags("폭염", "청량한")).toEqual(expect.arrayContaining([
+      "summer",
+      "tropical",
+      "refreshing",
+      "upbeat"
+    ]));
   });
 });

@@ -14,6 +14,8 @@ export interface JourneyRequestState {
   minutes: number;
   weather?: string;
   weatherSource?: "provided" | "open-meteo";
+  desiredVibe?: string;
+  contextTags?: string[];
   activity?: string;
   tasteProfile?: TasteProfile;
   seedArtistMbid?: string;

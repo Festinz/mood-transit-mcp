@@ -4,11 +4,13 @@ MoodTransit separates candidate discovery, factual metadata, editorial ranking, 
 
 ## Normal live candidate path
 
-The normal standalone path uses public ListenBrainz APIs, with a 10-minute in-memory cache for equivalent queries:
+The normal standalone path uses two public discovery routes with condition-aware fallback. It validates preference filters, three-stage feasibility, and requested context metadata instead of accepting whichever route merely returns three raw records first. Equivalent queries use a 10-minute in-memory cache:
 
-- tag radio for mood/genre-oriented discovery;
-- optional artist radio when the caller supplies a MusicBrainz artist MBID;
-- a batch recording metadata request for MusicBrainz-backed title, artist, duration, recording/artist MBIDs, ISRC, release, year, and community tags.
+- ListenBrainz tag radio for mood, weather, activity, and vibe-oriented discovery, plus optional artist radio when the caller supplies a MusicBrainz artist MBID;
+- the official MusicBrainz recording search API with bounded community-tag queries for mood, weather, activity, and vibe-oriented discovery;
+- a ListenBrainz batch recording metadata request for MusicBrainz-backed title, artist, duration, recording/artist MBIDs, ISRC, release, year, and community tags when the ListenBrainz route wins.
+
+For a generic request, a usable ListenBrainz result can finish the request without starting a redundant MusicBrainz tag search. For a weather or vibe request, context-bearing candidates are preferred and the second route is queried when the first cannot provide a strict, feasible result. The two routes are a resilience strategy, not two complete catalogs. The response names the route or routes actually used in `sources` and reports `selectionScope.kind=public_open_catalog`.
 
 When the user explicitly names an artist or song, the standalone path also uses the official MusicBrainz search API. Artist names are matched against normalized names and aliases before an MBID-qualified recording search; requested song titles are checked for exact normalized equality. The result reports requested and matched names in `searchResolution` and does not silently claim an unmatched artist or title.
 
@@ -18,6 +20,8 @@ ListenBrainz describes its public listen data and text as available under CC0. I
 - [ListenBrainz API documentation](https://listenbrainz.readthedocs.io/en/latest/users/api/index.html)
 
 MusicBrainz is a community-maintained music encyclopedia. Its database is large but incomplete and may contain missing, delayed, duplicated, or community-edited metadata. MoodTransit therefore never claims that the live results include every song, every release, or every item available from YouTube, Melon, or another provider.
+
+When the request includes a weather or vibe context, MoodTransit first tries to select candidates whose returned community metadata matches that context. If fewer than three candidates carry matching metadata, it broadens the pool instead of inventing a match and reports `contextMatchMode=broadened`. A strict match is reported as `contextMatchMode=strict`.
 
 MusicBrainz separates its database licensing as follows:
 

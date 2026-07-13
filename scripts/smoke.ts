@@ -15,7 +15,7 @@ async function main(): Promise<void> {
     endpoint = `http://127.0.0.1:${address.port}/mcp`;
   }
 
-  const client = new Client({ name: "mood-transit-smoke", version: "2.1.1" });
+  const client = new Client({ name: "mood-transit-smoke", version: "2.2.0" });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
     const listed = await client.listTools();
@@ -32,6 +32,15 @@ async function main(): Promise<void> {
         activity: "commute",
         minutes: 20,
         preferences: { preferredGenres: ["k-pop"], discovery: "adventurous" }
+      }
+    });
+
+    const hotWeatherLive = await client.callTool({
+      name: "build_live_mood_journey",
+      arguments: {
+        currentMood: "더운",
+        targetMood: "시원한",
+        minutes: 30
       }
     });
 
@@ -74,14 +83,39 @@ async function main(): Promise<void> {
       }
     });
 
-    if (live.isError || artistLive.isError || arranged.isError || refined.isError) throw new Error("A representative tool call returned isError");
+    const failedCalls = [
+      { name: "live", result: live },
+      { name: "hotWeatherLive", result: hotWeatherLive },
+      { name: "artistLive", result: artistLive },
+      { name: "arranged", result: arranged },
+      { name: "refined", result: refined }
+    ].filter(({ result }) => result.isError).map(({ name }) => name);
+    if (failedCalls.length > 0) throw new Error(`Representative tool calls returned isError: ${failedCalls.join(", ")}`);
     const liveStructured = (live.structuredContent ?? {}) as Record<string, unknown>;
+    const hotWeatherStructured = (hotWeatherLive.structuredContent ?? {}) as Record<string, unknown>;
     const artistStructured = (artistLive.structuredContent ?? {}) as Record<string, unknown>;
     const refinedStructured = (refined.structuredContent ?? {}) as Record<string, unknown>;
     const liveScope = (liveStructured.selectionScope ?? {}) as { kind?: string; candidateCount?: number; statementKo?: string };
     const arrangedScope = (arrangedStructured.selectionScope ?? {}) as { kind?: string; candidateCount?: number };
     if (process.env.REQUIRE_LIVE_CATALOG === "1" && liveScope.kind !== "public_open_catalog") {
       throw new Error(`Live catalog was required but source was ${liveScope.kind ?? "missing"}`);
+    }
+    const hotWeatherScope = (hotWeatherStructured.selectionScope ?? {}) as { kind?: string; candidateCount?: number };
+    const hotWeatherContext = (hotWeatherStructured.context ?? {}) as {
+      weather?: string;
+      desiredVibe?: string;
+      contextMatchMode?: string;
+    };
+    if (
+      hotWeatherStructured.currentMood !== "content"
+      || hotWeatherStructured.targetMood !== "energetic"
+      || hotWeatherContext.weather !== "더운"
+      || hotWeatherContext.desiredVibe !== "시원한"
+    ) {
+      throw new Error("The hot-weather refreshing request was not interpreted correctly");
+    }
+    if (process.env.REQUIRE_LIVE_CATALOG === "1" && hotWeatherScope.kind !== "public_open_catalog") {
+      throw new Error(`Hot-weather live catalog was required but source was ${hotWeatherScope.kind ?? "missing"}`);
     }
     const artistResolution = (artistStructured.searchResolution ?? {}) as { matchedArtists?: string[] };
     const artistStages = (artistStructured.stages ?? []) as Array<{ tracks?: Array<{ artist?: string }> }>;
@@ -98,6 +132,12 @@ async function main(): Promise<void> {
       tools: toolNames,
       calls: "ok",
       liveCatalog: liveScope,
+      hotWeatherRequest: {
+        currentMood: hotWeatherStructured.currentMood,
+        targetMood: hotWeatherStructured.targetMood,
+        context: hotWeatherContext,
+        selectionScope: hotWeatherScope
+      },
       artistSearch: {
         matchedArtists: artistResolution.matchedArtists,
         trackCount: artistTracks.length,

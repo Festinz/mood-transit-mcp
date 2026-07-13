@@ -118,6 +118,34 @@ class StubMusicBrainzService extends MusicBrainzService {
     };
   }
 }
+
+class TagMusicBrainzService extends StubMusicBrainzService {
+  readonly tagQueries: MusicBrainzCandidateQuery[] = [];
+
+  override async searchCandidates(input: MusicBrainzCandidateQuery): Promise<MusicBrainzCandidateResult> {
+    if (input.tags?.length) {
+      this.tagQueries.push(input);
+      return {
+        candidates: ["content", "joyful", "energetic"].map((mood, index) => ({
+          id: `musicbrainz:tag-fallback-${index}`,
+          title: `Refreshing ${index + 1}`,
+          artist: `Tag Artist ${index + 1}`,
+          durationSec: 180,
+          provider: "musicbrainz" as const,
+          tags: [mood, index === 1 ? "upbeat" : "refreshing"]
+        })),
+        matchedArtists: [],
+        matchedArtistNames: [],
+        matchedArtistMbids: [],
+        source: "musicbrainz-live",
+        attribution: MUSICBRAINZ_ATTRIBUTION,
+        fetchedAt: "2026-07-13T00:00:00.000Z"
+      };
+    }
+    return super.searchCandidates(input);
+  }
+}
+
 const app = createApp({
   weatherService: new WeatherService({ fetchImpl: weatherFetch }),
   listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch }),
@@ -221,6 +249,44 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(live.isError).not.toBe(true);
       expect(live.structuredContent).toHaveProperty("selectionScope.kind", "public_open_catalog");
 
+      const hotWeatherLive = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { currentMood: "더운", targetMood: "시원한", minutes: 30 }
+      });
+      expect(hotWeatherLive.isError).not.toBe(true);
+      expect(hotWeatherLive.structuredContent).toHaveProperty("currentMood", "content");
+      expect(hotWeatherLive.structuredContent).toHaveProperty("targetMood", "energetic");
+      expect(hotWeatherLive.structuredContent).toHaveProperty("context", expect.objectContaining({
+        weather: "더운",
+        desiredVibe: "시원한",
+        contextTags: expect.arrayContaining(["summer", "refreshing", "upbeat"]),
+        contextMatchMode: "broadened"
+      }));
+
+      const vibeOnlyLive = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { weather: "오늘은 폭염", desiredVibe: "청량하고 상쾌한", minutes: 30 }
+      });
+      expect(vibeOnlyLive.isError).not.toBe(true);
+      expect(vibeOnlyLive.structuredContent).toHaveProperty("currentMood", "content");
+      expect(vibeOnlyLive.structuredContent).toHaveProperty("targetMood", "energetic");
+      expect(vibeOnlyLive.structuredContent).toHaveProperty("context.desiredVibe", "청량하고 상쾌한");
+
+      const vibeRefined = await client.callTool({
+        name: "refine_mood_journey",
+        arguments: {
+          refinementState: hotWeatherLive.structuredContent?.refinementState,
+          changes: { targetMood: "포근하고 아늑하게" }
+        }
+      });
+      expect(vibeRefined.isError).not.toBe(true);
+      expect(vibeRefined.structuredContent).toHaveProperty("targetMood", "calm");
+      expect(vibeRefined.structuredContent).toHaveProperty("refinementState.request.desiredVibe", "포근하고 아늑하게");
+      expect(vibeRefined.structuredContent).toHaveProperty("refinementState.request.contextTags", expect.arrayContaining(["cozy", "acoustic"]));
+      const refinedContextTags = (vibeRefined.structuredContent?.refinementState as { request: { contextTags: string[] } }).request.contextTags;
+      expect(refinedContextTags).not.toContain("refreshing");
+      expect(refinedContextTags).not.toContain("upbeat");
+
       const artistLive = await client.callTool({
         name: "build_live_mood_journey",
         arguments: {
@@ -299,10 +365,15 @@ describe("MCP SDK discovery and representative calls", () => {
       expect(liveRefined.isError).not.toBe(true);
       expect(liveRefined.structuredContent).toHaveProperty("revision", 1);
 
+      const weatherAwareCallStart = listenBrainzFetch.mock.calls.length;
       const cityLive = await client.callTool({ name: "build_live_mood_journey", arguments: { currentMood: "울적", targetMood: "hopeful", city: "Seoul", activity: "commute", minutes: 20, preferences: { preferredGenres: ["k-pop"], discovery: "adventurous" } } });
       expect(cityLive.isError).not.toBe(true);
       expect((cityLive.content[0] as { text: string }).text).toContain("Open-Meteo");
       expect(cityLive.structuredContent).toHaveProperty("sources", expect.arrayContaining([expect.objectContaining({ name: "Open-Meteo", license: "CC BY 4.0" })]));
+      const cityRadioCalls = listenBrainzFetch.mock.calls.slice(weatherAwareCallStart)
+        .map(([input]) => new URL(input instanceof Request ? input.url : input.toString()))
+        .filter((url) => url.pathname === "/1/lb-radio/tags");
+      expect(cityRadioCalls.some((url) => url.searchParams.getAll("tag").includes("dreamy"))).toBe(true);
 
       const arranged = await client.callTool({
         name: "arrange_candidate_mood_journey",
@@ -437,6 +508,136 @@ describe("MCP SDK discovery and representative calls", () => {
     } finally {
       await client.close().catch(() => undefined);
       await new Promise<void>((resolve, reject) => isolatedServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("does not call MusicBrainz when ListenBrainz already supplies a rankable general pool", async () => {
+    let releaseGeneral!: () => void;
+    const generalGate = new Promise<void>((resolve) => { releaseGeneral = resolve; });
+    class HangingGeneralMusicBrainzService extends StubMusicBrainzService {
+      tagSearchCalls = 0;
+
+      override async searchCandidates(input: MusicBrainzCandidateQuery): Promise<MusicBrainzCandidateResult> {
+        if (input.tags?.length) {
+          this.tagSearchCalls += 1;
+          await generalGate;
+          return {
+            candidates: [],
+            matchedArtists: [],
+            matchedArtistNames: [],
+            matchedArtistMbids: [],
+            source: "musicbrainz-live",
+            attribution: MUSICBRAINZ_ATTRIBUTION,
+            fetchedAt: "2026-07-13T00:00:00.000Z"
+          };
+        }
+        return super.searchCandidates(input);
+      }
+    }
+    const musicBrainzService = new HangingGeneralMusicBrainzService();
+    const raceApp = createApp({
+      listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch }),
+      musicBrainzService
+    });
+    const raceServer = await new Promise<HttpServer>((resolve) => {
+      const candidate = raceApp.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const address = raceServer.address() as AddressInfo;
+    const client = new Client({ name: "public-source-race-test", version: "1.0.0" });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
+      const result = await Promise.race([
+        client.callTool({
+          name: "build_live_mood_journey",
+          arguments: { currentMood: "content", targetMood: "hopeful", minutes: 20 }
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error("fast public source was blocked by the hanging source")), 1_000);
+        })
+      ]);
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toHaveProperty("selectionScope.kind", "public_open_catalog");
+      expect(musicBrainzService.tagSearchCalls).toBe(0);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      releaseGeneral();
+      await client.close().catch(() => undefined);
+      await new Promise<void>((resolve, reject) => raceServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("merges MusicBrainz tags when the ListenBrainz pool cannot satisfy strict context", async () => {
+    const musicBrainzService = new TagMusicBrainzService();
+    const contextFallbackApp = createApp({
+      listenBrainzService: new ListenBrainzService({ fetchImpl: listenBrainzFetch }),
+      musicBrainzService
+    });
+    const contextServer = await new Promise<HttpServer>((resolve) => {
+      const candidate = contextFallbackApp.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const address = contextServer.address() as AddressInfo;
+    const client = new Client({ name: "strict-context-fallback-test", version: "1.0.0" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
+      const result = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: { weather: "hot", desiredVibe: "refreshing", minutes: 20 }
+      });
+      expect(result.isError).not.toBe(true);
+      expect(musicBrainzService.tagQueries).toHaveLength(1);
+      expect(result.structuredContent).toHaveProperty("selectionScope", expect.objectContaining({
+        kind: "public_open_catalog",
+        candidateCount: 6
+      }));
+      expect(result.structuredContent).toHaveProperty("context.contextMatchMode", "strict");
+      expect(result.structuredContent).toHaveProperty("sources", expect.arrayContaining([
+        expect.objectContaining({ name: "ListenBrainz" }),
+        expect.objectContaining({ name: "MusicBrainz" })
+      ]));
+    } finally {
+      await client.close().catch(() => undefined);
+      await new Promise<void>((resolve, reject) => contextServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("passes seedArtistMbid to the MusicBrainz tag fallback when ListenBrainz is unavailable", async () => {
+    const unavailableListenBrainz = new ListenBrainzService({
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }))
+    });
+    const musicBrainzService = new TagMusicBrainzService();
+    const musicBrainzFallbackApp = createApp({
+      listenBrainzService: unavailableListenBrainz,
+      musicBrainzService
+    });
+    const fallbackServer = await new Promise<HttpServer>((resolve) => {
+      const candidate = musicBrainzFallbackApp.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const address = fallbackServer.address() as AddressInfo;
+    const client = new Client({ name: "musicbrainz-tag-fallback-test", version: "1.0.0" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
+      const result = await client.callTool({
+        name: "build_live_mood_journey",
+        arguments: {
+          currentMood: "더운",
+          targetMood: "시원한",
+          seedArtistMbid: RESCENE_MBID,
+          minutes: 20
+        }
+      });
+      expect(result.isError).not.toBe(true);
+      expect(musicBrainzService.tagQueries).toHaveLength(1);
+      expect(musicBrainzService.tagQueries[0]?.artistMbids).toEqual([RESCENE_MBID]);
+      expect(result.structuredContent).toHaveProperty("selectionScope", expect.objectContaining({
+        kind: "public_open_catalog",
+        candidateCount: 3
+      }));
+      expect(result.structuredContent).toHaveProperty("context.contextMatchMode", "strict");
+      expect(result.structuredContent).toHaveProperty("sources", [expect.objectContaining({ name: "MusicBrainz" })]);
+    } finally {
+      await client.close().catch(() => undefined);
+      await new Promise<void>((resolve, reject) => fallbackServer.close((error) => error ? reject(error) : resolve()));
     }
   });
 
@@ -609,7 +810,10 @@ describe("MCP SDK discovery and representative calls", () => {
 
   it("labels the 67-track emergency path as fallback rather than a provider batch", async () => {
     const failedFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
-    const fallbackApp = createApp({ listenBrainzService: new ListenBrainzService({ fetchImpl: failedFetch }) });
+    const fallbackApp = createApp({
+      listenBrainzService: new ListenBrainzService({ fetchImpl: failedFetch }),
+      musicBrainzService: new MusicBrainzService({ fetchImpl: failedFetch })
+    });
     const fallbackServer = await new Promise<HttpServer>((resolve) => {
       const candidate = fallbackApp.listen(0, "127.0.0.1", () => resolve(candidate));
     });

@@ -121,9 +121,10 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     escapeMarkdown(scope.statementKo)
   ];
 
-  if (journey.context.weather || journey.context.activity) {
+  if (journey.context.weather || journey.context.desiredVibe || journey.context.activity) {
     lines.push([
       journey.context.weather ? `날씨 ${escapeMarkdown(journey.context.weather)}` : undefined,
+      journey.context.desiredVibe ? `원하는 분위기 ${escapeMarkdown(journey.context.desiredVibe)}` : undefined,
       journey.context.activity ? `활동 ${escapeMarkdown(journey.context.activity)}` : undefined
     ].filter(Boolean).join(" · "));
   }
@@ -220,6 +221,9 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
         : "이 결과는 전달받은 후보 묶음에만 한정되며 공급자 전체 카탈로그 결과가 아닙니다.",
     "3단계 감정 경로와 점수는 기분환승의 편집적 계산이며 공식 음향 특성이나 치료 효과가 아닙니다."
   ];
+  if (journey.context.contextMatchMode === "broadened") {
+    limitations.push("공개 메타데이터에서 날씨·분위기 태그가 확인된 후보가 3개 미만이어서 감정 경로와 일반 태그까지 범위를 넓혔습니다.");
+  }
   if (options.fallbackReason) limitations.push(`실시간 후보 fallback 사유: ${options.fallbackReason}`);
   if (options.searchResolution) {
     if (options.searchResolution.unresolvedArtists.length > 0) {
@@ -256,6 +260,7 @@ export function formatLiveJourneyResult(journey: LiveJourney, options: LiveForma
     requestedMinutes: journey.requestedMinutes,
     estimatedMinutes: journey.estimatedMinutes ?? 0,
     durationBasis,
+    context: journey.context,
     stages,
     sources,
     limitations,

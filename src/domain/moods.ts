@@ -45,6 +45,56 @@ const SYNONYMS: Record<string, CanonicalMood> = {
   romantic: "romantic", loving: "romantic", affectionate: "romantic", 설렘: "romantic", 사랑: "romantic", 로맨틱: "romantic"
 };
 
+interface DescriptorRule {
+  pattern: RegExp;
+  mood: CanonicalMood;
+  tags: readonly string[];
+}
+
+const DESCRIPTOR_RULES: readonly DescriptorRule[] = [
+  {
+    pattern: /시원|청량|상쾌|개운|산뜻|refresh|fresh|breez|crisp|cool/iu,
+    mood: "energetic",
+    tags: ["refreshing", "upbeat", "summer", "dance pop"]
+  },
+  {
+    pattern: /더운|더워|덥|무더|폭염|후덥|습하|hot|heat|humid|muggy/iu,
+    mood: "content",
+    tags: ["summer", "tropical", "chillout"]
+  },
+  {
+    pattern: /포근|따뜻|아늑|cozy|warm/iu,
+    mood: "calm",
+    tags: ["cozy", "acoustic", "soft"]
+  },
+  {
+    pattern: /몽환|신비|dreamy|dreamlike|ethereal/iu,
+    mood: "calm",
+    tags: ["dreamy", "dream pop", "ambient"]
+  },
+  {
+    pattern: /감성|센치|nostal|추억|향수/iu,
+    mood: "romantic",
+    tags: ["nostalgic", "indie pop", "acoustic"]
+  },
+  {
+    pattern: /강렬|웅장|짜릿|통쾌|폭발|intense|powerful|epic|groovy/iu,
+    mood: "energetic",
+    tags: ["energetic", "power", "upbeat"]
+  },
+  {
+    pattern: /어두|dark|moody|somber/iu,
+    mood: "sad",
+    tags: ["moody", "melancholic", "indie"]
+  }
+] as const;
+
+export interface MoodInterpretation {
+  mood: CanonicalMood;
+  kind: "mood" | "descriptor" | "default";
+  contextTags: string[];
+}
+
 function compact(value: string): string {
   return value.trim().toLocaleLowerCase("en").replace(/[\s_-]+/g, "");
 }
@@ -58,6 +108,55 @@ export function normalizeMood(value: string): CanonicalMood {
   const contained = ordered.find(([key]) => normalized.includes(key));
   if (contained) return contained[1];
   throw new Error(`지원하지 않는 기분 표현입니다: ${value.trim()}`);
+}
+
+/**
+ * MCP callers sometimes place weather or sensory vibe wording in a mood field.
+ * Keep normalizeMood strict for domain validation, but make the public boundary
+ * tolerant and preserve those descriptors as music-discovery tags.
+ */
+export function interpretMood(value: string | undefined, fallback: CanonicalMood): MoodInterpretation {
+  if (!value?.trim()) return { mood: fallback, kind: "default", contextTags: [] };
+  try {
+    return { mood: normalizeMood(value), kind: "mood", contextTags: [] };
+  } catch {
+    const normalized = compact(value);
+    const rule = DESCRIPTOR_RULES.find(({ pattern }) => pattern.test(normalized));
+    if (rule) return { mood: rule.mood, kind: "descriptor", contextTags: [...rule.tags] };
+
+    const safeTag = value
+      .normalize("NFKC")
+      .trim()
+      .toLocaleLowerCase("en")
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 64);
+    return {
+      mood: fallback,
+      kind: "default",
+      contextTags: safeTag ? [safeTag] : []
+    };
+  }
+}
+
+const WEATHER_MUSIC_TAGS: Record<WeatherTag, readonly string[]> = {
+  clear: ["sunny", "feel good", "indie pop"],
+  cloudy: ["dreamy", "indie", "ambient"],
+  rain: ["rainy day", "acoustic", "lo-fi"],
+  snow: ["winter", "piano", "acoustic"],
+  hot: ["summer", "tropical", "chillout"],
+  cold: ["winter", "cozy", "acoustic"],
+  wind: ["breezy", "dream pop", "indie pop"],
+  unknown: []
+};
+
+export function musicContextTags(weather?: string, desiredVibe?: string): string[] {
+  const vibe = interpretMood(desiredVibe, "content");
+  return [...new Set([
+    ...WEATHER_MUSIC_TAGS[normalizeWeather(weather)],
+    ...vibe.contextTags
+  ])].slice(0, 8);
 }
 
 export function interpolateMood(from: CanonicalMood, to: CanonicalMood, progress: number): MoodVector {
@@ -74,13 +173,13 @@ export function interpolateMood(from: CanonicalMood, to: CanonicalMood, progress
 export function normalizeWeather(value?: string): WeatherTag {
   if (!value) return "unknown";
   const normalized = compact(value);
-  if (/rain|drizzle|shower|비|소나기|장마/.test(normalized)) return "rain";
-  if (/snow|sleet|눈|진눈깨비/.test(normalized)) return "snow";
-  if (/cloud|overcast|흐림|구름/.test(normalized)) return "cloudy";
-  if (/wind|breeze|바람/.test(normalized)) return "wind";
-  if (/hot|heat|더움|폭염/.test(normalized)) return "hot";
-  if (/cold|chilly|추움|한파/.test(normalized)) return "cold";
-  if (/clear|sun|맑음|화창/.test(normalized)) return "clear";
+  if (/hail|snow|sleet|우박|눈(?:이|은|오는|와|옴|내리|중|$)|눈보라|진눈깨비/.test(normalized)) return "snow";
+  if (/storm|thunder|lightning|typhoon|rain|drizzle|shower|폭풍|태풍|천둥|번개|비(?:가|는|오는|와|옴|내리|중|$)|빗|소나기|장마/.test(normalized)) return "rain";
+  if (/fog|mist|cloud|overcast|안개|흐림|흐린|흐려|구름/.test(normalized)) return "cloudy";
+  if (/wind|breeze|cool|바람|바람부|선선|시원/.test(normalized)) return "wind";
+  if (/hot|heat|humid|muggy|더움|더운|더워|덥|무더|폭염|후덥|습하/.test(normalized)) return "hot";
+  if (/cold|chilly|추움|추운|추워|춥|한파/.test(normalized)) return "cold";
+  if (/clear|sun|sunny|맑음|맑은|맑아|맑고|화창/.test(normalized)) return "clear";
   return "unknown";
 }
 

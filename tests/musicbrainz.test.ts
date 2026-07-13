@@ -74,7 +74,7 @@ describe("MusicBrainz service", () => {
       expect(init.redirect).toBe("manual");
       const headers = new Headers(init.headers);
       expect(headers.get("accept")).toBe("application/json");
-      expect(headers.get("user-agent")).toContain("MoodTransit/2.1");
+      expect(headers.get("user-agent")).toContain("MoodTransit/2.2");
       expect(headers.get("user-agent")).toContain("github.com/Festinz/mood-transit-mcp");
 
       if (url.pathname === "/ws/2/artist/") {
@@ -150,6 +150,33 @@ describe("MusicBrainz service", () => {
     const result = await service.searchCandidates({ trackTitles: ["  love   attack "] });
 
     expect(result.candidates.map((candidate) => candidate.recordingMbid)).toEqual([LOVE_ATTACK_MBID]);
+    expect(result.matchedArtists).toEqual([]);
+  });
+
+  it("searches the public recording catalog by bounded mood and context tags", async () => {
+    const mockFetch = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      expect(url.pathname).toBe("/ws/2/recording/");
+      expect(url.searchParams.get("query")).toBe('(tag:"refreshing" OR tag:"summer" OR tag:"Upbeat")');
+      return jsonResponse({
+        count: 3,
+        offset: 0,
+        recordings: [
+          recordingFixture(LOVE_ATTACK_MBID, "Summer One", RESCENE_MBID, "RESCENE"),
+          recordingFixture(LIVE_RECORDING_MBID, "Fresh Two", OTHER_ARTIST_MBID, "Other Artist"),
+          recordingFixture("cccccccc-dddd-4eee-8fff-000000000000", "Upbeat Three", "dddddddd-eeee-4fff-8000-111111111111", "Third Artist")
+        ]
+      });
+    });
+    const service = new MusicBrainzService({ fetchImpl: mockFetch });
+
+    const result = await service.searchCandidates({
+      tags: [" Upbeat ", "refreshing", "summer", "upbeat"],
+      count: 12
+    });
+
+    expect(result.candidates).toHaveLength(3);
+    expect(result.candidates.every((candidate) => candidate.provider === "musicbrainz")).toBe(true);
     expect(result.matchedArtists).toEqual([]);
   });
 
@@ -369,7 +396,9 @@ describe("MusicBrainz service", () => {
       { artistMbids: Array.from({ length: 6 }, () => RESCENE_MBID) },
       { artistMbids: ["not-an-mbid"] },
       { trackTitles: Array.from({ length: 13 }, (_, index) => `track-${index}`) },
+      { tags: Array.from({ length: 9 }, (_, index) => `tag-${index}`) },
       { artists: ["RESCENE\nInjected"] },
+      { tags: ["summer\nInjected"] },
       { trackTitles: ["x".repeat(161)] },
       { trackTitles: ["song"], count: 0 },
       { trackTitles: ["song"], count: 1.5 },
@@ -383,6 +412,6 @@ describe("MusicBrainz service", () => {
     expect(mockFetch).not.toHaveBeenCalled();
     expect(() => new MusicBrainzService({ cacheTtlMs: 600_001 })).toThrow(MusicBrainzServiceError);
     expect(() => new MusicBrainzService({ userAgent: "anonymous" })).toThrow(MusicBrainzServiceError);
-    expect(() => new MusicBrainzService({ userAgent: "MoodTransit/2.1" })).toThrow(MusicBrainzServiceError);
+    expect(() => new MusicBrainzService({ userAgent: "MoodTransit/2.2" })).toThrow(MusicBrainzServiceError);
   });
 });
